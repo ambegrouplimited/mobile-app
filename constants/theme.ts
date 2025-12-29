@@ -1,41 +1,62 @@
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+const palette = {
+  ink: '#1C1F23',
+  inkMuted: '#4F5966',
+  slate: '#4D5E72',
+  slateSoft: '#7B8896',
+  accent: '#C08732',
+  success: '#2F6E4F',
+  background: '#FFFFFF',
+  surface: '#F5F6F7',
+  border: '#E4E7EC',
+  darkBackground: '#0F1217',
+  darkSurface: '#151921',
+};
+
+export const Palette = palette;
+
+export const Theme = {
+  palette,
+  spacing: {
+    xxs: 4,
+    xs: 8,
+    sm: 12,
+    md: 16,
+    lg: 24,
+    xl: 32,
+  },
+  radii: {
+    sm: 8,
+    md: 12,
+    lg: 20,
+  },
+};
 
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    text: palette.ink,
+    background: palette.background,
+    tint: palette.slate,
+    icon: palette.inkMuted,
+    tabIconDefault: palette.inkMuted,
+    tabIconSelected: palette.slate,
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    text: '#E1E6EE',
+    background: palette.darkBackground,
+    tint: palette.surface,
+    icon: '#A1A9B6',
+    tabIconDefault: '#7A8394',
+    tabIconSelected: '#FFFFFF',
   },
 };
 
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {

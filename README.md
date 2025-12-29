@@ -25,6 +25,17 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+### Gmail / Outlook OAuth redirect configuration
+
+Set `EXPO_PUBLIC_GMAIL_REDIRECT_URL` to the HTTPS OAuth bridge endpoint (for example, `https://api.duesoon.app/api/oauth/mobile-redirect`). Both Gmail and Outlook use this value when starting their consent flows.
+
+```bash
+export EXPO_PUBLIC_GMAIL_REDIRECT_URL="https://api.duesoon.app/api/oauth/mobile-redirect"
+npx expo start
+```
+
+When you create standalone builds, update both this variable and the backend `MOBILE_APP_DEEPLINK_URI` to match the final scheme or universal link you’ve registered in Google Cloud Console so the handoff works end-to-end.
+
 ## Get a fresh project
 
 When you're ready, run:

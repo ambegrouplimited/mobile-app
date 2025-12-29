@@ -1,98 +1,280 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { Feather } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { Theme } from "@/constants/theme";
+import { activeClients, pastClients, ClientListItem } from "@/data/mock-clients";
 
-export default function HomeScreen() {
+const summaryStats = [
+  { label: "Outstanding", value: "$12,420", caption: "4 clients awaiting payment" },
+  { label: "Paid this week", value: "$5,800", caption: "Invoice sequences closed" },
+] as const;
+
+const FILTERS = ["Not Paid", "Paid"] as const;
+
+export default function DashboardScreen() {
+  const router = useRouter();
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]>("Not Paid");
+  const visibleClients = useMemo(() => activeClients.filter((client) => client.status === filter), [filter]);
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.summaryRow}>
+          {summaryStats.map((stat) => (
+            <View key={stat.label} style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>{stat.label}</Text>
+              <Text style={styles.summaryValue}>{stat.value}</Text>
+              <Text style={styles.summaryCaption}>{stat.caption}</Text>
+            </View>
+          ))}
+        </View>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+        <View style={styles.filterContainer}>
+          <View style={styles.filterPill}>
+            {FILTERS.map((option) => {
+              const active = option === filter;
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => setFilter(option)}
+                  style={[styles.filterButton, active && styles.filterButtonActive]}
+                >
+                  <Text style={[styles.filterLabel, active && styles.filterLabelActive]}>{option}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <ClientList title={`${filter} clients`} clients={visibleClients} onPress={(id) => router.push(`/client/${id}`)} />
+        <ClientList title="Past clients" clients={pastClients} muted onPress={(id) => router.push(`/client/${id}`)} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const typeLabels = {
+  individual: "Individual",
+  business: "Business",
+} as const;
+
+function ClientList({
+  title,
+  clients: list,
+  muted,
+  onPress,
+}: {
+  title: string;
+  clients: ClientListItem[];
+  muted?: boolean;
+  onPress?: (id: string) => void;
+}) {
+  return (
+    <View style={[styles.listCard, muted && styles.listCardMuted]}>
+      <View style={styles.listHeader}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{list.length} listed</Text>
+      </View>
+      {list.map((client) => (
+        <Pressable key={client.id} style={styles.clientRow} onPress={() => onPress?.(client.id)}>
+          <View style={styles.clientText}>
+            <View style={styles.clientNameRow}>
+              <Text style={styles.clientName}>{client.name}</Text>
+              <View style={styles.clientTypeBadge}>
+                <Text style={styles.clientTypeLabel}>{typeLabels[client.client_type]}</Text>
+              </View>
+            </View>
+            <Text style={styles.clientDetail}>{client.detail}</Text>
+          </View>
+          <View style={styles.clientAmounts}>
+            <Text style={styles.clientAmount}>{client.amount}</Text>
+            <View style={[styles.badge, client.status === "Paid" ? styles.badgePaid : styles.badgeDue]}>
+              <Feather
+                name={client.status === "Paid" ? "check-circle" : "alert-circle"}
+                size={14}
+                color={client.status === "Paid" ? Theme.palette.success : Theme.palette.slate}
+              />
+              <Text
+                style={[
+                  styles.badgeLabel,
+                  client.status === "Paid" ? styles.badgeLabelPaid : styles.badgeLabelDue,
+                ]}
+              >
+                {client.status}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+      ))}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  safe: {
+    flex: 1,
+    backgroundColor: Theme.palette.background,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: Theme.spacing.lg,
+    paddingVertical: Theme.spacing.xl,
+    gap: Theme.spacing.lg,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  filterPill: {
+    flexDirection: "row",
+    backgroundColor: Theme.palette.surface,
+    borderRadius: Theme.radii.md,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    overflow: "hidden",
+  },
+  filterContainer: {
+    alignSelf: "flex-end",
+  },
+  filterButton: {
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+  },
+  filterButtonActive: {
+    backgroundColor: Theme.palette.slate,
+  },
+  filterLabel: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  filterLabelActive: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  summaryRow: {
+    flexDirection: "row",
+    gap: Theme.spacing.md,
+  },
+  summaryCard: {
+    flex: 1,
+    borderRadius: Theme.radii.lg,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    padding: Theme.spacing.lg,
+    backgroundColor: "#FFFFFF",
+    gap: 6,
+  },
+  summaryLabel: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  summaryValue: {
+    fontSize: 24,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  summaryCaption: {
+    fontSize: 13,
+    color: Theme.palette.slateSoft,
+  },
+  listCard: {
+    borderRadius: Theme.radii.lg,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  listCardMuted: {
+    opacity: 0.85,
+  },
+  listHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+  },
+  listTitle: {
+    fontSize: 18,
+    fontWeight: "500",
+    color: Theme.palette.ink,
+  },
+  listMeta: {
+    fontSize: 13,
+    color: Theme.palette.slateSoft,
+  },
+  clientRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: Theme.palette.border,
+    paddingTop: Theme.spacing.md,
+    gap: Theme.spacing.md,
+  },
+  clientText: {
+    flex: 1,
+    gap: 4,
+  },
+  clientNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  clientName: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: Theme.palette.ink,
+  },
+  clientTypeBadge: {
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: 2,
+    borderRadius: Theme.radii.sm,
+    backgroundColor: Theme.palette.surface,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+  },
+  clientTypeLabel: {
+    fontSize: 11,
+    color: Theme.palette.slate,
+    textTransform: "capitalize",
+  },
+  clientDetail: {
+    fontSize: 13,
+    color: Theme.palette.slateSoft,
+  },
+  clientAmounts: {
+    alignItems: "flex-end",
+    gap: 6,
+  },
+  clientAmount: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: Theme.spacing.sm,
+    paddingVertical: Theme.spacing.xs,
+    borderRadius: Theme.radii.md,
+    borderWidth: 1,
+  },
+  badgePaid: {
+    borderColor: Theme.palette.success,
+    backgroundColor: "rgba(47, 110, 79, 0.08)",
+  },
+  badgeDue: {
+    borderColor: Theme.palette.border,
+    backgroundColor: Theme.palette.surface,
+  },
+  badgeLabel: {
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  badgeLabelPaid: {
+    color: Theme.palette.success,
+  },
+  badgeLabelDue: {
+    color: Theme.palette.slate,
   },
 });

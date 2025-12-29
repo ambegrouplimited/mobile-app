@@ -1,0 +1,1259 @@
+import { Feather } from "@expo/vector-icons";
+import * as AuthSession from "expo-auth-session";
+import * as Haptics from "expo-haptics";
+import * as Linking from "expo-linking";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  KeyboardAvoidingView,
+  KeyboardTypeOptions,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { Theme } from "@/constants/theme";
+import { useAuth } from "@/providers/auth-provider";
+import { createClient } from "@/services/clients";
+import {
+  connectGmailAccount,
+  fetchGmailStatus,
+  GmailStatus,
+} from "@/services/gmail";
+import {
+  connectOutlookAccount,
+  fetchOutlookStatus,
+  OutlookStatus,
+} from "@/services/outlook";
+import { connectSlackAccount, fetchSlackStatus, SlackStatus } from "@/services/slack";
+import { fetchTelegramStatus, TelegramStatus } from "@/services/telegram";
+import type {
+  ClientCreatePayload,
+  ContactMethod,
+  ContactMethodPayload,
+  ContactMethodType,
+} from "@/types/clients";
+
+WebBrowser.maybeCompleteAuthSession();
+
+const platformMeta = {
+  gmail: {
+    label: "Gmail",
+    contactLabel: "Client email",
+    placeholder: "client@example.com",
+    keyboard: "email-address",
+  },
+  outlook: {
+    label: "Outlook",
+    contactLabel: "Client email",
+    placeholder: "client@example.com",
+    keyboard: "email-address",
+  },
+  slack: {
+    label: "Slack",
+    contactLabel: "Slack contact",
+    placeholder: "@client",
+  },
+  whatsapp: {
+    label: "WhatsApp",
+    contactLabel: "WhatsApp number",
+    placeholder: "+1 (415) 555-2981",
+    keyboard: "phone-pad",
+  },
+  telegram: {
+    label: "Telegram",
+    contactLabel: "Telegram handle",
+    placeholder: "@client",
+  },
+} as const;
+
+const proxySupported = new Set<PlatformId>(["gmail", "outlook"]);
+
+type PlatformId = keyof typeof platformMeta;
+type DispatchMode = "self" | "proxy";
+type ConnectionState = {
+  connected: boolean;
+  loading: boolean;
+  busy: boolean;
+  error: string | null;
+  meta?: string | null;
+};
+
+type ContactFieldState = {
+  label: string;
+  email: string;
+  phone: string;
+  slackTeamId: string;
+  slackUserId: string;
+  telegramChatId: string;
+  telegramUsername: string;
+};
+
+type ValidationResult =
+  | { valid: false; error: string }
+  | { valid: true; contactPayload: ContactMethodPayload; summary: string };
+
+const ENV_OAUTH_REDIRECT = process.env.EXPO_PUBLIC_GMAIL_REDIRECT_URL;
+
+export default function SendOptionsScreen() {
+  const router = useRouter();
+  const { session } = useAuth();
+  const rawParams = useLocalSearchParams<Record<string, string>>();
+  const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const [platform, setPlatform] = useState<PlatformId>(() => {
+    return platformMeta[persistedParams.platform as PlatformId]
+      ? (persistedParams.platform as PlatformId)
+      : "gmail";
+  });
+
+  const [selection, setSelection] = useState<DispatchMode>(
+    (persistedParams.mode as DispatchMode) ?? (proxySupported.has(platform) ? "proxy" : "self"),
+  );
+  const [modalVisible, setModalVisible] = useState(false);
+  const [contactLabel, setContactLabel] = useState(
+    persistedParams.contactLabel || `${platformMeta[platform].label} contact`,
+  );
+  const [contactEmail, setContactEmail] = useState(persistedParams.contact ?? "");
+  const [contactPhone, setContactPhone] = useState(persistedParams.contactPhone ?? "");
+  const [slackTeamId, setSlackTeamId] = useState(persistedParams.slackTeamId ?? "");
+  const [slackUserId, setSlackUserId] = useState(persistedParams.slackUserId ?? "");
+  const [telegramChatId, setTelegramChatId] = useState(persistedParams.telegramChatId ?? "");
+  const [telegramUsername, setTelegramUsername] = useState(persistedParams.telegramUsername ?? "");
+  const [contactError, setContactError] = useState<string | null>(null);
+  const [savingClient, setSavingClient] = useState(false);
+  const [selectionRequiresConnection, setSelectionRequiresConnection] = useState(
+    selection === "self" && supportsConnection(platform),
+  );
+  const [connectionState, setConnectionState] = useState<ConnectionState>(() => ({
+    connected: !selectionRequiresConnection,
+    loading: selectionRequiresConnection,
+    busy: false,
+    error: null,
+    meta: null,
+  }));
+  const [telegramFlowActive, setTelegramFlowActive] = useState(false);
+
+  const loadConnectionStatus = useCallback(async () => {
+    if (!selectionRequiresConnection || !session?.accessToken) {
+      return;
+    }
+    setConnectionState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      if (platform === "gmail") {
+        const status = await fetchGmailStatus(session.accessToken);
+        setConnectionState((prev) => ({
+          ...prev,
+          connected: status.connected,
+          loading: false,
+          meta: formatGmailMeta(status),
+          error: null,
+        }));
+        return;
+      }
+      if (platform === "outlook") {
+        const status = await fetchOutlookStatus(session.accessToken);
+        setConnectionState((prev) => ({
+          ...prev,
+          connected: status.connected,
+          loading: false,
+          meta: formatOutlookMeta(status),
+          error: null,
+        }));
+        return;
+      }
+      if (platform === "slack") {
+        const status = await fetchSlackStatus(session.accessToken);
+        const connected = (status.workspaces?.length ?? 0) > 0;
+        setConnectionState((prev) => ({
+          ...prev,
+          connected,
+          loading: false,
+          meta: connected ? formatSlackMeta(status) : null,
+          error: null,
+        }));
+        return;
+      }
+      if (platform === "telegram") {
+        const status = await fetchTelegramStatus(session.accessToken);
+        const connected = Boolean(status.has_business_connection && status.connection?.connected);
+        setConnectionState((prev) => ({
+          ...prev,
+          connected,
+          loading: false,
+          meta: connected ? formatTelegramMeta(status) : null,
+          error: null,
+        }));
+        if (connected) {
+          setTelegramFlowActive(false);
+        }
+        return;
+      }
+      setConnectionState((prev) => ({ ...prev, connected: true, loading: false, error: null }));
+    } catch (err) {
+      setConnectionState((prev) => ({
+        ...prev,
+        connected: false,
+        loading: false,
+        error: err instanceof Error ? err.message : "Unable to check connection.",
+      }));
+    }
+  }, [platform, selectionRequiresConnection, session?.accessToken]);
+
+  useEffect(() => {
+    const requiresConnection = selection === "self" && supportsConnection(platform);
+    setSelectionRequiresConnection(requiresConnection);
+  }, [selection, platform]);
+
+  useEffect(() => {
+    if (!selectionRequiresConnection) {
+      setConnectionState({ connected: true, loading: false, busy: false, error: null, meta: null });
+      setTelegramFlowActive(false);
+      return;
+    }
+    if (!session?.accessToken) {
+      setConnectionState({
+        connected: false,
+        loading: false,
+        busy: false,
+        error: "Sign in again to connect this channel.",
+        meta: null,
+      });
+      return;
+    }
+    loadConnectionStatus();
+  }, [selectionRequiresConnection, loadConnectionStatus, session?.accessToken]);
+
+  const handleConnectPress = useCallback(async () => {
+    if (!selectionRequiresConnection || connectionState.connected || connectionState.busy) {
+      return;
+    }
+    if (!session?.accessToken) {
+      setConnectionState((prev) => ({
+        ...prev,
+        error: "Sign in again to connect this channel.",
+      }));
+      return;
+    }
+    setConnectionState((prev) => ({ ...prev, busy: true, error: null }));
+    try {
+      if (platform === "gmail") {
+        await startGmailConnect(session.accessToken);
+      } else if (platform === "outlook") {
+        await startOutlookConnect(session.accessToken);
+      } else if (platform === "slack") {
+        await startSlackConnect(session.accessToken);
+      } else if (platform === "telegram") {
+        await startTelegramConnect(session.accessToken);
+        setTelegramFlowActive(true);
+      }
+      await loadConnectionStatus();
+    } catch (err) {
+      if (platform === "telegram") {
+        setTelegramFlowActive(false);
+      }
+      setConnectionState((prev) => ({
+        ...prev,
+        error: err instanceof Error ? err.message : "Unable to connect this channel.",
+      }));
+    } finally {
+      setConnectionState((prev) => ({ ...prev, busy: false }));
+    }
+  }, [connectionState.busy, connectionState.connected, loadConnectionStatus, platform, selectionRequiresConnection, session?.accessToken]);
+
+  const connectionReady =
+    !selectionRequiresConnection || (connectionState.connected && !connectionState.loading);
+
+  const platformLabel = platformMeta[platform].label;
+
+  useEffect(() => {
+    if (!selectionRequiresConnection || platform !== "telegram") {
+      setTelegramFlowActive(false);
+      return;
+    }
+  }, [platform, selectionRequiresConnection]);
+
+  useEffect(() => {
+    if (
+      !selectionRequiresConnection ||
+      platform !== "telegram" ||
+      connectionState.connected ||
+      !telegramFlowActive
+    ) {
+      return;
+    }
+    const interval = setInterval(() => {
+      loadConnectionStatus();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [
+    selectionRequiresConnection,
+    platform,
+    telegramFlowActive,
+    connectionState.connected,
+    loadConnectionStatus,
+  ]);
+
+  const options: Array<{
+    id: DispatchMode;
+    title: string;
+    detail: string;
+    badge?: string;
+    disabled?: boolean;
+  }> = [
+    {
+      id: "proxy",
+      title: "Send on your behalf",
+      detail: `DueSoon delivers the reminder from a neutral ${platformLabel} inbox.`,
+      disabled: !proxySupported.has(platform),
+    },
+    {
+      id: "self",
+      title: "Send as you",
+      detail: "Connect your account so DueSoon mirrors your identity and signature.",
+      badge: "Recommended",
+    },
+  ];
+
+  const openContactModal = () => {
+    setContactError(null);
+    setModalVisible(true);
+  };
+
+  const handleContinue = async () => {
+    const fields: ContactFieldState = {
+      label: contactLabel,
+      email: contactEmail,
+      phone: contactPhone,
+      slackTeamId,
+      slackUserId,
+      telegramChatId,
+      telegramUsername,
+    };
+    const validation = validateContactFields(platform, fields);
+    if (!validation.valid) {
+      setContactError(validation.error);
+      return;
+    }
+
+    if (persistedParams.clientId && persistedParams.contactMethodId) {
+      proceedToPayment({
+        clientId: persistedParams.clientId,
+        contactMethodId: persistedParams.contactMethodId,
+        summaryValue: validation.summary,
+      });
+      return;
+    }
+
+    if (!session?.accessToken) {
+      setContactError("Please sign in again to save this client.");
+      return;
+    }
+
+    setSavingClient(true);
+    try {
+      const clientPayload = buildClientPayload(persistedParams, validation.contactPayload);
+      const client = await createClient(clientPayload, session.accessToken);
+      const resolvedMethod = resolveContactMethod(client.contact_methods, validation.contactPayload);
+      proceedToPayment({
+        clientId: client.id,
+        contactMethodId: resolvedMethod?.id ?? client.contact_methods[0]?.id ?? "",
+        summaryValue: validation.summary,
+      });
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : "Unable to save this client right now.");
+    } finally {
+      setSavingClient(false);
+    }
+  };
+
+  const proceedToPayment = ({
+    clientId,
+    contactMethodId,
+    summaryValue,
+  }: {
+    clientId: string;
+    contactMethodId: string;
+    summaryValue: string;
+  }) => {
+    if (!clientId || !contactMethodId) {
+      setContactError("Missing client contact details. Please try again.");
+      return;
+    }
+    setModalVisible(false);
+    router.push({
+      pathname: "/new-reminder/payment-method",
+      params: {
+        ...persistedParams,
+        platform,
+        mode: selection,
+        contact: summaryValue,
+        contactLabel: contactLabel.trim(),
+        clientId,
+        contactMethodId,
+        contactPhone,
+        slackTeamId,
+        slackUserId,
+        telegramChatId,
+        telegramUsername,
+      },
+    });
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Pressable style={styles.backLink} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+          <Text style={styles.backLabel}>Choose platform</Text>
+        </Pressable>
+
+        <View style={styles.header}>
+          <Text style={styles.title}>How should we send it?</Text>
+          <Text style={styles.subtitle}>
+            Decide whether DueSoon keeps the reminder anonymous or sends it directly through your {platformLabel} account.
+          </Text>
+          {platform === "gmail" || platform === "outlook" ? (
+            <Pressable
+              style={styles.platformLink}
+              onPress={async () => {
+                await Haptics.selectionAsync();
+                const currentPlatform = platform;
+                const next = currentPlatform === "gmail" ? "outlook" : "gmail";
+                const requiresConnection = selection === "self" && supportsConnection(next);
+                setPlatform(next);
+                setSelectionRequiresConnection(requiresConnection);
+                setConnectionState({
+                  connected: !requiresConnection,
+                  loading: requiresConnection,
+                  busy: false,
+                  error: null,
+                  meta: null,
+                });
+                setContactLabel((prev) => {
+                  if (persistedParams.contactLabel) return prev;
+                  const previousDefault = `${platformMeta[currentPlatform].label} contact`;
+                  return prev === previousDefault ? `${platformMeta[next].label} contact` : prev;
+                });
+              }}
+            >
+              <Text style={styles.platformLinkText}>
+                Use {platform === "gmail" ? "Outlook" : "Gmail"} instead
+              </Text>
+              <Feather name="external-link" size={14} color={Theme.palette.slate} />
+            </Pressable>
+          ) : null}
+        </View>
+
+        <View style={styles.optionStack}>
+          {options.map((option) => {
+            if (option.disabled) {
+              return null;
+            }
+            const active = selection === option.id;
+            return (
+              <Pressable
+                key={option.id}
+                onPress={() => setSelection(option.id)}
+                style={[styles.optionCard, active && styles.optionCardActive]}
+              >
+                <View style={styles.optionHeader}>
+                  <Text style={styles.optionTitle}>{option.title}</Text>
+                  {option.badge ? (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeLabel}>{option.badge}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.optionDetail}>{option.detail}</Text>
+                {active ? (
+                  option.id === "self" ? (
+                    supportsConnection(platform) ? (
+                      <View style={styles.connectBox}>
+                        <Text style={styles.connectTitle}>Connect {platformLabel}</Text>
+                        <Text style={styles.connectDetail}>
+                          DueSoon sends directly from your {platformLabel} account so messages feel personal.
+                        </Text>
+                        {connectionState.meta ? (
+                          <Text style={styles.connectMeta}>{connectionState.meta}</Text>
+                        ) : null}
+                        {connectionState.error ? (
+                          <Text style={styles.errorText}>{connectionState.error}</Text>
+                        ) : null}
+                        <Pressable
+                          style={[
+                            styles.connectButton,
+                            connectionState.connected && styles.connectButtonConnected,
+                            (connectionState.busy || connectionState.loading) && styles.connectButtonDisabled,
+                          ]}
+                        disabled={
+                          connectionState.connected || connectionState.busy || connectionState.loading
+                        }
+                        onPress={async () => {
+                          await Haptics.selectionAsync();
+                          await handleConnectPress();
+                        }}
+                      >
+                          {connectionState.connected ? (
+                            <View style={styles.connectButtonContent}>
+                              <Feather name="check" size={14} color="#FFFFFF" />
+                              <Text style={styles.connectButtonText}>Connected</Text>
+                            </View>
+                          ) : (
+                            <Text style={styles.connectButtonText}>
+                              {connectionState.busy
+                                ? "Connecting..."
+                                : connectionState.loading
+                                  ? "Checking..."
+                                  : `Connect ${platformLabel}`}
+                            </Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <View style={styles.noteBox}>
+                        <Feather name="info" size={16} color={Theme.palette.slate} />
+                        <Text style={styles.noteText}>
+                          We’ll send via your {platformLabel} identity automatically.
+                        </Text>
+                      </View>
+                    )
+                  ) : (
+                    <View style={styles.noteBox}>
+                      <Feather name="shield" size={16} color={Theme.palette.slate} />
+                      <Text style={styles.noteText}>
+                        DueSoon shares a compliance-friendly inbox with read receipts so you never double send.
+                      </Text>
+                    </View>
+                  )
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Pressable
+          style={[
+            styles.primaryButton,
+            (!connectionReady || savingClient) && styles.primaryButtonDisabled,
+          ]}
+          disabled={!connectionReady}
+          onPress={async () => {
+            if (!connectionReady) return;
+            await Haptics.selectionAsync();
+            openContactModal();
+          }}
+        >
+          <Text style={styles.primaryButtonText}>Use {selectionLabel(selection)} via {platformLabel}</Text>
+        </Pressable>
+        {selectionRequiresConnection && !connectionState.connected ? (
+          <Text style={styles.connectionHint}>Connect {platformLabel} to continue.</Text>
+        ) : null}
+      </ScrollView>
+
+      <Modal visible={modalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <ScrollView
+            style={styles.modalScroll}
+            contentContainerStyle={styles.modalCardWrap}
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+          >
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Client contact</Text>
+              <Text style={styles.modalSubtitle}>
+                DueSoon needs the client’s contact details for {platformLabel} before scheduling the reminder.
+              </Text>
+            <Text style={styles.fieldLabel}>Contact label</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={`${platformLabel} contact`}
+              value={contactLabel}
+              onChangeText={(text) => {
+                setContactError(null);
+                setContactLabel(text);
+              }}
+            />
+            {renderContactFields({
+              platform,
+              contactError,
+              setContactError,
+              contactEmail,
+              contactPhone,
+              slackTeamId,
+              slackUserId,
+              telegramChatId,
+              telegramUsername,
+              setContactEmail,
+              setContactPhone,
+              setSlackTeamId,
+              setSlackUserId,
+              setTelegramChatId,
+              setTelegramUsername,
+            })}
+            {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.modalButtonMuted}
+                onPress={async () => {
+                  await Haptics.selectionAsync();
+                  setModalVisible(false);
+                }}
+              >
+                <Text style={styles.modalButtonMutedText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalButton, savingClient && styles.modalButtonDisabled]}
+                disabled={savingClient}
+                onPress={async () => {
+                  await Haptics.selectionAsync();
+                  handleContinue();
+                }}
+              >
+                <Text style={styles.modalButtonText}>{savingClient ? "Saving..." : "Continue"}</Text>
+              </Pressable>
+            </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+function selectionLabel(mode: DispatchMode) {
+  return mode === "self" ? "Send as you" : "Send on your behalf";
+}
+
+function renderContactFields({
+  platform,
+  contactError,
+  setContactError,
+  contactEmail,
+  contactPhone,
+  slackTeamId,
+  slackUserId,
+  telegramChatId,
+  telegramUsername,
+  setContactEmail,
+  setContactPhone,
+  setSlackTeamId,
+  setSlackUserId,
+  setTelegramChatId,
+  setTelegramUsername,
+}: {
+  platform: PlatformId;
+  contactError: string | null;
+  contactEmail: string;
+  contactPhone: string;
+  slackTeamId: string;
+  slackUserId: string;
+  telegramChatId: string;
+  telegramUsername: string;
+  setContactError: (value: string | null) => void;
+  setContactEmail: (value: string) => void;
+  setContactPhone: (value: string) => void;
+  setSlackTeamId: (value: string) => void;
+  setSlackUserId: (value: string) => void;
+  setTelegramChatId: (value: string) => void;
+  setTelegramUsername: (value: string) => void;
+}) {
+  if (platform === "gmail" || platform === "outlook") {
+    return (
+      <>
+        <Text style={styles.fieldLabel}>{platformMeta[platform].contactLabel}</Text>
+        <TextInput
+          style={[styles.input, contactError && styles.inputError]}
+          placeholder={platformMeta[platform].placeholder}
+          keyboardType={platformMeta[platform].keyboard as KeyboardTypeOptions}
+          autoCapitalize="none"
+          value={contactEmail}
+          onChangeText={(text) => {
+            setContactEmail(text);
+            setContactError(null);
+          }}
+        />
+      </>
+    );
+  }
+  if (platform === "whatsapp") {
+    return (
+      <>
+        <Text style={styles.fieldLabel}>WhatsApp number</Text>
+        <TextInput
+          style={[styles.input, contactError && styles.inputError]}
+          placeholder={platformMeta.whatsapp.placeholder}
+          keyboardType={platformMeta.whatsapp.keyboard as KeyboardTypeOptions}
+          autoCapitalize="none"
+          value={contactPhone}
+          onChangeText={(text) => {
+            setContactPhone(text);
+            setContactError(null);
+          }}
+        />
+      </>
+    );
+  }
+  if (platform === "slack") {
+    return (
+      <>
+        <Text style={styles.fieldLabel}>Slack workspace ID</Text>
+        <TextInput
+          style={[styles.input, contactError && styles.inputError]}
+          placeholder="T012ABC34"
+          autoCapitalize="none"
+          value={slackTeamId}
+          onChangeText={(text) => {
+            setSlackTeamId(text);
+            setContactError(null);
+          }}
+        />
+        <Text style={styles.fieldLabel}>Slack user ID</Text>
+        <TextInput
+          style={[styles.input, contactError && styles.inputError]}
+          placeholder="U045XYZ78"
+          autoCapitalize="none"
+          value={slackUserId}
+          onChangeText={(text) => {
+            setSlackUserId(text);
+            setContactError(null);
+          }}
+        />
+      </>
+    );
+  }
+  return (
+    <>
+      <Text style={styles.fieldLabel}>Telegram chat ID</Text>
+      <TextInput
+        style={[styles.input, contactError && styles.inputError]}
+        placeholder="123456789"
+        keyboardType="number-pad"
+        value={telegramChatId}
+        onChangeText={(text) => {
+          setTelegramChatId(text);
+          setContactError(null);
+        }}
+      />
+      <Text style={styles.fieldLabel}>Telegram username</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="@client"
+        autoCapitalize="none"
+        value={telegramUsername}
+        onChangeText={(text) => {
+          setTelegramUsername(text);
+          setContactError(null);
+        }}
+      />
+    </>
+  );
+}
+
+function validateContactFields(platform: PlatformId, fields: ContactFieldState): ValidationResult {
+  const trimmedLabel = fields.label.trim();
+  if (!trimmedLabel) {
+    return { valid: false, error: "Add a label so you recognize the contact later." };
+  }
+  if (platform === "gmail" || platform === "outlook") {
+    if (!fields.email.trim()) {
+      return { valid: false, error: "Enter the client's email." };
+    }
+    return {
+      valid: true,
+      contactPayload: {
+        type: "email",
+        label: trimmedLabel,
+        email: fields.email.trim(),
+      },
+      summary: fields.email.trim(),
+    };
+  }
+  if (platform === "whatsapp") {
+    if (!fields.phone.trim()) {
+      return { valid: false, error: "Enter the WhatsApp number." };
+    }
+    return {
+      valid: true,
+      contactPayload: {
+        type: "whatsapp",
+        label: trimmedLabel,
+        phone: fields.phone.trim(),
+      },
+      summary: fields.phone.trim(),
+    };
+  }
+  if (platform === "slack") {
+    if (!fields.slackTeamId.trim() || !fields.slackUserId.trim()) {
+      return { valid: false, error: "Slack requires both the workspace ID and user ID." };
+    }
+    return {
+      valid: true,
+      contactPayload: {
+        type: "slack",
+        label: trimmedLabel,
+        slack_team_id: fields.slackTeamId.trim(),
+        slack_user_id: fields.slackUserId.trim(),
+      },
+      summary: `Workspace ${fields.slackTeamId.trim()} · User ${fields.slackUserId.trim()}`,
+    };
+  }
+  if (!fields.telegramChatId.trim()) {
+    return { valid: false, error: "Enter the Telegram chat ID." };
+  }
+  return {
+    valid: true,
+    contactPayload: {
+      type: "telegram",
+      label: trimmedLabel,
+      telegram_chat_id: fields.telegramChatId.trim(),
+      telegram_username: fields.telegramUsername.trim() || undefined,
+    },
+    summary: fields.telegramUsername.trim()
+      ? `${fields.telegramUsername.trim()} (${fields.telegramChatId.trim()})`
+      : fields.telegramChatId.trim(),
+  };
+}
+
+function buildClientPayload(
+  params: Record<string, string>,
+  contactPayload: ContactMethodPayload,
+): ClientCreatePayload {
+  return {
+    name: params.client ?? "Client",
+    company_name: params.businessName || undefined,
+    notes: params.notes || undefined,
+    client_type: (params.clientType as ClientCreatePayload["client_type"]) ?? "business",
+    contact_methods: [contactPayload],
+  };
+}
+
+function resolveContactMethod(contactMethods: ContactMethod[], payload: ContactMethodPayload) {
+  return contactMethods.find((method) => {
+    if (method.type !== payload.type) return false;
+    if (payload.email && method.email === payload.email) return true;
+    if (payload.phone && method.phone === payload.phone) return true;
+    if (payload.slack_team_id && method.slack_team_id === payload.slack_team_id) return true;
+    if (payload.telegram_chat_id && method.telegram_chat_id === payload.telegram_chat_id) return true;
+    return false;
+  });
+}
+
+function normalizeParams(params: Record<string, string | string[]>) {
+  const result: Record<string, string> = {};
+  Object.entries(params).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      result[key] = value[0] ?? "";
+    } else if (typeof value === "string") {
+      result[key] = value;
+    }
+  });
+  return result;
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: Theme.palette.background,
+  },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: Theme.spacing.lg,
+    paddingVertical: Theme.spacing.xl,
+    gap: Theme.spacing.lg,
+  },
+  backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  header: {
+    gap: Theme.spacing.xs,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  subtitle: {
+    fontSize: 15,
+    color: Theme.palette.inkMuted,
+    lineHeight: 22,
+  },
+  platformLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    marginTop: Theme.spacing.xs,
+  },
+  platformLinkText: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+    fontWeight: "500",
+  },
+  optionStack: {
+    gap: Theme.spacing.md,
+  },
+  optionCard: {
+    borderRadius: Theme.radii.lg,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.sm,
+  },
+  optionCardActive: {
+    borderColor: Theme.palette.slate,
+    backgroundColor: "rgba(77, 94, 114, 0.08)",
+  },
+  optionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  optionDetail: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+    lineHeight: 20,
+  },
+  badge: {
+    paddingHorizontal: Theme.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Theme.radii.sm,
+    backgroundColor: Theme.palette.surface,
+  },
+  badgeLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: Theme.palette.slate,
+  },
+  connectBox: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    padding: Theme.spacing.md,
+    gap: Theme.spacing.xs,
+  },
+  connectTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  connectDetail: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+    lineHeight: 18,
+  },
+  connectButton: {
+    marginTop: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Theme.palette.ink,
+  },
+  connectButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  connectButtonText: {
+    fontSize: 14,
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  connectButtonConnected: {
+    backgroundColor: Theme.palette.success,
+  },
+  connectButtonDisabled: {
+    opacity: 0.6,
+  },
+  connectMeta: {
+    fontSize: 12,
+    color: Theme.palette.slate,
+  },
+  noteBox: {
+    flexDirection: "row",
+    gap: Theme.spacing.sm,
+    padding: Theme.spacing.md,
+    borderRadius: Theme.radii.md,
+    backgroundColor: Theme.palette.surface,
+    alignItems: "center",
+  },
+  noteText: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+    flex: 1,
+    lineHeight: 18,
+  },
+  primaryButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: Theme.spacing.md,
+    borderRadius: Theme.radii.md,
+    backgroundColor: Theme.palette.slate,
+  },
+  primaryButtonDisabled: {
+    opacity: 0.5,
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  connectionHint: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: Theme.spacing.lg,
+  },
+  modalScroll: {
+    width: "100%",
+  },
+  modalCardWrap: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: Theme.spacing.lg,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.sm,
+    overflow: "hidden",
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+    lineHeight: 20,
+  },
+  fieldLabel: {
+    fontSize: 13,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    color: Theme.palette.slate,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  inputError: {
+    borderColor: Theme.palette.accent,
+  },
+  errorText: {
+    fontSize: 13,
+    color: Theme.palette.accent,
+  },
+  modalActions: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderColor: Theme.palette.border,
+    marginTop: Theme.spacing.sm,
+  },
+  modalButtonMuted: {
+    flex: 1,
+    paddingVertical: Theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRightWidth: 1,
+    borderColor: Theme.palette.border,
+  },
+  modalButtonMutedText: {
+    fontSize: 15,
+    color: Theme.palette.slate,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: Theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Theme.palette.slate,
+  },
+  modalButtonDisabled: {
+    opacity: 0.65,
+  },
+  modalButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+});
+
+function supportsConnection(id: PlatformId) {
+  return id === "gmail" || id === "outlook" || id === "slack" || id === "telegram";
+}
+
+function formatExpiry(iso?: string | null) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return `Expires ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+function formatGmailMeta(status: GmailStatus) {
+  if (!status.connected) return null;
+  return formatExpiry(status.expires_at);
+}
+
+function formatOutlookMeta(status: OutlookStatus) {
+  if (!status.connected) return null;
+  const parts: string[] = [];
+  if (status.email_address) {
+    parts.push(status.email_address);
+  }
+  const expiry = formatExpiry(status.expires_at);
+  if (expiry) parts.push(expiry);
+  return parts.join(" · ") || null;
+}
+
+function formatSlackMeta(status: SlackStatus) {
+  const count = status.workspaces?.length ?? 0;
+  if (!count) return null;
+  return `${count} connected workspace${count === 1 ? "" : "s"}`;
+}
+
+function formatTelegramMeta(status: TelegramStatus) {
+  const username = status.connection?.telegram_username;
+  if (!username) return null;
+  return username.startsWith("@") ? username : `@${username}`;
+}
+
+function getRedirectUri() {
+  if (ENV_OAUTH_REDIRECT) {
+    return ENV_OAUTH_REDIRECT;
+  }
+  return AuthSession.makeRedirectUri({
+    scheme: Platform.select({ web: undefined, default: "mobileapp" }),
+  });
+}
+
+function parseQueryParams(url: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.forEach((value, key) => {
+      params[key] = value;
+    });
+    if (parsed.hash) {
+      const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+      hashParams.forEach((value, key) => {
+        params[key] = value;
+      });
+    }
+    return params;
+  } catch {
+    const fallback = Linking.parse(url);
+    Object.entries(fallback.queryParams ?? {}).forEach(([key, value]) => {
+      if (typeof value === "string") {
+        params[key] = value;
+      }
+    });
+    return params;
+  }
+}
+
+async function startGmailConnect(token: string) {
+  const redirectUri = getRedirectUri();
+  const status = await fetchGmailStatus(token, { redirectUri });
+  const onboardingUrl = status.onboarding_url;
+  if (!onboardingUrl) {
+    throw new Error("Unable to start the Gmail consent flow. Please try again.");
+  }
+  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  if (result.type !== "success" || !result.url) {
+    throw new Error("Gmail connection was canceled.");
+  }
+  const params = parseQueryParams(result.url);
+  const code = params.code;
+  const state = params.state;
+  if (!code || !state) {
+    throw new Error("Gmail did not return the required credentials. Please try again.");
+  }
+  await connectGmailAccount({ code, state, redirectUri }, token);
+}
+
+async function startOutlookConnect(token: string) {
+  const redirectUri = getRedirectUri();
+  const status = await fetchOutlookStatus(token, { redirectUri });
+  const onboardingUrl = status.onboarding_url;
+  if (!onboardingUrl) {
+    throw new Error("Unable to start the Outlook consent flow. Please try again.");
+  }
+  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  if (result.type !== "success" || !result.url) {
+    throw new Error("Outlook connection was canceled.");
+  }
+  const params = parseQueryParams(result.url);
+  const code = params.code;
+  const state = params.state;
+  if (!code || !state) {
+    throw new Error("Outlook did not return the required credentials. Please try again.");
+  }
+  await connectOutlookAccount({ code, state, redirectUri }, token);
+}
+
+async function startSlackConnect(token: string) {
+  const redirectUri = getRedirectUri();
+  const status = await fetchSlackStatus(token, { redirectUri });
+  const onboardingUrl = status.onboarding_url;
+  if (!onboardingUrl) {
+    throw new Error("Unable to start the Slack consent flow. Please try again.");
+  }
+  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  if (result.type !== "success" || !result.url) {
+    throw new Error("Slack connection was canceled.");
+  }
+  const params = parseQueryParams(result.url);
+  const code = params.code;
+  const state = params.state;
+  if (!code || !state) {
+    throw new Error("Slack did not return the required credentials. Please try again.");
+  }
+  await connectSlackAccount({ code, state, redirectUri }, token);
+}
+
+async function startTelegramConnect(token: string) {
+  const status = await fetchTelegramStatus(token);
+  const onboardingUrl =
+    status.connection?.onboarding_url ?? status.onboarding_url;
+  if (!onboardingUrl) {
+    throw new Error("Unable to open Telegram. Please try again.");
+  }
+  await Linking.openURL(onboardingUrl);
+}

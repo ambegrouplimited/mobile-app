@@ -1,33 +1,45 @@
-import { Tabs } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { BottomTabBar } from '@/components/ui/bottom-tab-bar';
+import { ScreenLoader } from '@/components/ui/screen-loader';
+import { useAuth } from '@/providers/auth-provider';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const { status } = useAuth();
+
+  if (status === 'loading') {
+    return <ScreenLoader label="Loading your workspace..." />;
+  }
+
+  if (status !== 'authenticated') {
+    return <Redirect href="/login" />;
+  }
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+    <Tabs screenOptions={{ headerShown: false }} tabBar={(props) => <BottomTabBar {...props} />}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: 'Dashboard',
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="new-reminder"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'New reminder',
+        }}
+      />
+      <Tabs.Screen
+        name="reminders"
+        options={{
+          title: 'Reminders',
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: 'Settings',
         }}
       />
     </Tabs>

@@ -6,6 +6,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   KeyboardTypeOptions,
   Modal,
@@ -32,13 +33,12 @@ import {
   fetchOutlookStatus,
   OutlookStatus,
 } from "@/services/outlook";
-import { connectSlackAccount, fetchSlackStatus, SlackStatus } from "@/services/slack";
-import { fetchTelegramStatus, TelegramStatus } from "@/services/telegram";
+import { SlackStatus, SlackUser, connectSlackAccount, fetchSlackStatus, fetchSlackUsers } from "@/services/slack";
+import { fetchTelegramChats, fetchTelegramStatus, TelegramChat, TelegramStatus } from "@/services/telegram";
 import type {
   ClientCreatePayload,
   ContactMethod,
   ContactMethodPayload,
-  ContactMethodType,
 } from "@/types/clients";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -126,6 +126,32 @@ export default function SendOptionsScreen() {
   const [slackUserId, setSlackUserId] = useState(persistedParams.slackUserId ?? "");
   const [telegramChatId, setTelegramChatId] = useState(persistedParams.telegramChatId ?? "");
   const [telegramUsername, setTelegramUsername] = useState(persistedParams.telegramUsername ?? "");
+  const [slackStatusData, setSlackStatusData] = useState<SlackStatus | null>(null);
+  const [slackUsersByWorkspace, setSlackUsersByWorkspace] = useState<Record<string, SlackUser[]>>({});
+  const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
+  const [slackUsersLoading, setSlackUsersLoading] = useState(false);
+  const [slackUsersError, setSlackUsersError] = useState<string | null>(null);
+  const [slackWorkspaceExpanded, setSlackWorkspaceExpanded] = useState(false);
+  const [slackUsersExpanded, setSlackUsersExpanded] = useState(false);
+  const [telegramChats, setTelegramChats] = useState<TelegramChat[]>([]);
+  const [telegramChatsLoading, setTelegramChatsLoading] = useState(false);
+  const [telegramChatsError, setTelegramChatsError] = useState<string | null>(null);
+  const [telegramPickerExpanded, setTelegramPickerExpanded] = useState(false);
+  const slackWorkspaces = useMemo(() => slackStatusData?.workspaces ?? [], [slackStatusData]);
+  const selectedSlackWorkspace = useMemo(() => {
+    if (!slackTeamId) return null;
+    return slackWorkspaces.find((workspace) => workspace.team_id === slackTeamId) ?? null;
+  }, [slackTeamId, slackWorkspaces]);
+  const selectedSlackUser = useMemo(() => {
+    if (!slackUserId) return null;
+    const workspaceUsers = slackUsersByWorkspace[slackTeamId];
+    const sourceList = workspaceUsers ?? slackUsers;
+    return sourceList.find((user) => user.id === slackUserId) ?? null;
+  }, [slackUserId, slackTeamId, slackUsers, slackUsersByWorkspace]);
+  const selectedTelegramChat = useMemo(() => {
+    if (!telegramChatId) return null;
+    return telegramChats.find((chat) => String(chat.chat_id) === telegramChatId) ?? null;
+  }, [telegramChatId, telegramChats]);
   const [contactError, setContactError] = useState<string | null>(null);
   const [savingClient, setSavingClient] = useState(false);
   const [selectionRequiresConnection, setSelectionRequiresConnection] = useState(
@@ -170,7 +196,22 @@ export default function SendOptionsScreen() {
       }
       if (platform === "slack") {
         const status = await fetchSlackStatus(session.accessToken);
-        const connected = (status.workspaces?.length ?? 0) > 0;
+        const workspaces = status.workspaces ?? [];
+        const connected = workspaces.length > 0;
+        setSlackStatusData(status);
+        if (!connected) {
+          setSlackTeamId("");
+          setSlackUserId("");
+          setSlackUsers([]);
+          setSlackUsersByWorkspace({});
+        } else {
+          setSlackTeamId((prev) => {
+            if (prev && workspaces.some((workspace) => workspace.team_id === prev)) {
+              return prev;
+            }
+            return workspaces[0]?.team_id ?? "";
+          });
+        }
         setConnectionState((prev) => ({
           ...prev,
           connected,
@@ -215,6 +256,7 @@ export default function SendOptionsScreen() {
     if (!selectionRequiresConnection) {
       setConnectionState({ connected: true, loading: false, busy: false, error: null, meta: null });
       setTelegramFlowActive(false);
+      setSlackStatusData((prev) => (platform === "slack" ? prev : null));
       return;
     }
     if (!session?.accessToken) {
@@ -228,7 +270,7 @@ export default function SendOptionsScreen() {
       return;
     }
     loadConnectionStatus();
-  }, [selectionRequiresConnection, loadConnectionStatus, session?.accessToken]);
+  }, [selectionRequiresConnection, loadConnectionStatus, platform, session?.accessToken]);
 
   const handleConnectPress = useCallback(async () => {
     if (!selectionRequiresConnection || connectionState.connected || connectionState.busy) {
@@ -280,6 +322,137 @@ export default function SendOptionsScreen() {
   }, [platform, selectionRequiresConnection]);
 
   useEffect(() => {
+    if (platform !== "slack") {
+      setSlackWorkspaceExpanded(false);
+      setSlackUsersExpanded(false);
+    }
+    if (platform !== "telegram") {
+      setTelegramPickerExpanded(false);
+    }
+  }, [platform]);
+
+  useEffect(() => {
+    if (!modalVisible) {
+      setSlackWorkspaceExpanded(false);
+      setSlackUsersExpanded(false);
+      setTelegramPickerExpanded(false);
+    }
+  }, [modalVisible]);
+
+  useEffect(() => {
+    if (platform !== "slack") {
+      setSlackUsers([]);
+      setSlackUsersError(null);
+      setSlackUsersLoading(false);
+      return;
+    }
+    if (!slackTeamId) {
+      setSlackUsers([]);
+      setSlackUsersError(null);
+      setSlackUsersLoading(false);
+      setSlackUserId("");
+      return;
+    }
+    const cachedUsers = slackUsersByWorkspace[slackTeamId];
+    if (cachedUsers) {
+      setSlackUsers(cachedUsers);
+      setSlackUsersError(null);
+      setSlackUsersLoading(false);
+      setSlackUserId((prev) => {
+        if (!prev || cachedUsers.some((user) => user.id === prev)) {
+          return prev;
+        }
+        return "";
+      });
+      return;
+    }
+    if (!session?.accessToken) {
+      return;
+    }
+    let cancelled = false;
+    setSlackUsers([]);
+    setSlackUsersError(null);
+    setSlackUsersLoading(true);
+    fetchSlackUsers(slackTeamId, session.accessToken)
+      .then((users) => {
+        if (cancelled) return;
+        setSlackUsers(users);
+        setSlackUsersByWorkspace((prev) => ({ ...prev, [slackTeamId]: users }));
+        setSlackUserId((prev) => {
+          if (!prev || users.some((user) => user.id === prev)) {
+            return prev;
+          }
+          return "";
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setSlackUsers([]);
+        setSlackUsersError(err instanceof Error ? err.message : "Unable to load Slack users.");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setSlackUsersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [platform, session?.accessToken, slackTeamId, slackUsersByWorkspace]);
+
+  useEffect(() => {
+    if (platform !== "telegram") {
+      setTelegramChats([]);
+      setTelegramChatsError(null);
+      setTelegramChatsLoading(false);
+      setTelegramPickerExpanded(false);
+      return;
+    }
+    if (!session?.accessToken || !connectionState.connected) {
+      setTelegramChats([]);
+      setTelegramChatsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setTelegramChatsError(null);
+    setTelegramChatsLoading(true);
+    fetchTelegramChats(session.accessToken)
+      .then((chats) => {
+        if (cancelled) return;
+        const normalized = chats
+          .map((chat) => ({
+            ...chat,
+            chat_id: chat.chat_id != null ? String(chat.chat_id) : "",
+          }))
+          .filter((chat) => chat.chat_id);
+        setTelegramChats(normalized);
+        if (telegramChatId && normalized.some((chat) => chat.chat_id === telegramChatId)) {
+          const currentChat = normalized.find((chat) => chat.chat_id === telegramChatId);
+          if (currentChat?.participant_username) {
+            const handle = currentChat.participant_username.startsWith("@")
+              ? currentChat.participant_username
+              : `@${currentChat.participant_username}`;
+            setTelegramUsername(handle);
+          }
+        } else {
+          setTelegramChatId("");
+          setTelegramUsername("");
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setTelegramChats([]);
+        setTelegramChatsError(err instanceof Error ? err.message : "Unable to load Telegram chats.");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setTelegramChatsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [platform, session?.accessToken, connectionState.connected, telegramChatId]);
+
+  useEffect(() => {
     if (
       !selectionRequiresConnection ||
       platform !== "telegram" ||
@@ -300,13 +473,13 @@ export default function SendOptionsScreen() {
     loadConnectionStatus,
   ]);
 
-  const options: Array<{
+  const options: {
     id: DispatchMode;
     title: string;
     detail: string;
     badge?: string;
     disabled?: boolean;
-  }> = [
+  }[] = [
     {
       id: "proxy",
       title: "Send on your behalf",
@@ -320,6 +493,32 @@ export default function SendOptionsScreen() {
       badge: "Recommended",
     },
   ];
+
+  const slackWorkspaceLabel = selectedSlackWorkspace
+    ? selectedSlackWorkspace.team_name ?? selectedSlackWorkspace.team_id
+    : "";
+  const slackUserLabel =
+    selectedSlackUser?.real_name || selectedSlackUser?.display_name || selectedSlackUser?.name || "";
+  const telegramChatSummary = useMemo(() => {
+    if (!selectedTelegramChat) {
+      return null;
+    }
+    const parts: string[] = [];
+    const primary = selectedTelegramChat.participant_name || selectedTelegramChat.title;
+    if (primary) {
+      parts.push(primary);
+    }
+    if (selectedTelegramChat.participant_username) {
+      const username = selectedTelegramChat.participant_username.startsWith("@")
+        ? selectedTelegramChat.participant_username
+        : `@${selectedTelegramChat.participant_username}`;
+      parts.push(username);
+    }
+    if (parts.length === 0) {
+      return `Chat ${selectedTelegramChat.chat_id}`;
+    }
+    return parts.join(" · ");
+  }, [selectedTelegramChat]);
 
   const openContactModal = () => {
     setContactError(null);
@@ -336,7 +535,11 @@ export default function SendOptionsScreen() {
       telegramChatId,
       telegramUsername,
     };
-    const validation = validateContactFields(platform, fields);
+    const validation = validateContactFields(platform, fields, {
+      slackWorkspaceName: slackWorkspaceLabel,
+      slackUserName: slackUserLabel,
+      telegramChatSummary,
+    });
     if (!validation.valid) {
       setContactError(validation.error);
       return;
@@ -404,6 +607,251 @@ export default function SendOptionsScreen() {
         telegramUsername,
       },
     });
+  };
+
+  const renderContactFields = () => {
+    if (platform === "gmail" || platform === "outlook") {
+      return (
+        <>
+          <Text style={styles.fieldLabel}>{platformMeta[platform].contactLabel}</Text>
+          <TextInput
+            style={[styles.input, contactError && styles.inputError]}
+            placeholder={platformMeta[platform].placeholder}
+            keyboardType={platformMeta[platform].keyboard as KeyboardTypeOptions}
+            autoCapitalize="none"
+            value={contactEmail}
+            onChangeText={(text) => {
+              setContactEmail(text);
+              setContactError(null);
+            }}
+          />
+        </>
+      );
+    }
+    if (platform === "whatsapp") {
+      return (
+        <>
+          <Text style={styles.fieldLabel}>WhatsApp number</Text>
+          <TextInput
+            style={[styles.input, contactError && styles.inputError]}
+            placeholder={platformMeta.whatsapp.placeholder}
+            keyboardType={platformMeta.whatsapp.keyboard as KeyboardTypeOptions}
+            autoCapitalize="none"
+            value={contactPhone}
+            onChangeText={(text) => {
+              setContactPhone(text);
+              setContactError(null);
+            }}
+          />
+        </>
+      );
+    }
+    if (platform === "slack") {
+      const noWorkspace = slackWorkspaces.length === 0;
+      return (
+        <>
+          <Text style={styles.fieldLabel}>Slack workspace</Text>
+          <Pressable
+            style={[
+              styles.selectInput,
+              contactError && !slackTeamId && styles.inputError,
+              noWorkspace && styles.selectInputDisabled,
+            ]}
+            onPress={() => {
+              if (noWorkspace) return;
+              setSlackWorkspaceExpanded((prev) => !prev);
+              setSlackUsersExpanded(false);
+              setContactError(null);
+            }}
+          >
+            <Text style={slackWorkspaceLabel ? styles.selectValue : styles.selectPlaceholder}>
+              {slackWorkspaceLabel || (noWorkspace ? "No workspaces connected" : "Select workspace")}
+            </Text>
+            <Feather
+              name={slackWorkspaceExpanded ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={Theme.palette.slate}
+            />
+          </Pressable>
+          {noWorkspace ? (
+            <Text style={styles.helperText}>
+              Connect Slack from Messaging connections to browse members.
+            </Text>
+          ) : null}
+          {slackWorkspaceExpanded ? (
+            <View style={styles.selectionList}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {slackWorkspaces.map((workspace) => {
+                  const active = workspace.team_id === slackTeamId;
+                  const label = workspace.team_name ?? workspace.team_id;
+                  return (
+                    <Pressable
+                      key={workspace.team_id}
+                      style={[styles.selectionItem, active && styles.selectionItemActive]}
+                      onPress={() => {
+                        setSlackTeamId(workspace.team_id);
+                        setSlackWorkspaceExpanded(false);
+                        setSlackUsersExpanded(false);
+                        setContactError(null);
+                      }}
+                    >
+                      <Text style={styles.selectionItemName}>{label}</Text>
+                      <Text style={styles.selectionItemDetail}>{workspace.team_id}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          ) : null}
+          <Text style={styles.fieldLabel}>Slack person</Text>
+          <Pressable
+            style={[
+              styles.selectInput,
+              contactError && slackTeamId && !slackUserId && styles.inputError,
+              (!slackTeamId || noWorkspace) && styles.selectInputDisabled,
+            ]}
+            onPress={() => {
+              if (!slackTeamId || noWorkspace) {
+                setContactError("Select a Slack workspace first.");
+                return;
+              }
+              setSlackUsersExpanded((prev) => !prev);
+              setSlackWorkspaceExpanded(false);
+              setContactError(null);
+            }}
+          >
+            <Text style={slackUserLabel ? styles.selectValue : styles.selectPlaceholder}>
+              {slackUsersLoading ? "Loading members…" : slackUserLabel || "Select person"}
+            </Text>
+            <Feather
+              name={slackUsersExpanded ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={Theme.palette.slate}
+            />
+          </Pressable>
+          {slackUsersError ? <Text style={styles.helperTextError}>{slackUsersError}</Text> : null}
+          {slackUsersExpanded ? (
+            <View style={[styles.selectionList, styles.selectionListLarge]}>
+              {slackUsersLoading ? (
+                <View style={styles.selectionEmpty}>
+                  <ActivityIndicator color={Theme.palette.slate} />
+                </View>
+              ) : slackUsersError ? (
+                <View style={styles.selectionEmpty}>
+                  <Text style={styles.helperTextError}>{slackUsersError}</Text>
+                </View>
+              ) : slackUsers.length === 0 ? (
+                <Text style={styles.helperText}>No members found in this workspace.</Text>
+              ) : (
+                <ScrollView keyboardShouldPersistTaps="handled">
+                  {slackUsers.map((member) => {
+                    const active = member.id === slackUserId;
+                    const name = member.real_name || member.display_name || member.name;
+                    const detail =
+                      member.display_name && member.display_name !== name ? member.display_name : member.name;
+                    return (
+                      <Pressable
+                        key={member.id}
+                        style={[styles.selectionItem, active && styles.selectionItemActive]}
+                        onPress={() => {
+                          setSlackUserId(member.id);
+                          setSlackUsersExpanded(false);
+                          setContactError(null);
+                        }}
+                      >
+                        <Text style={styles.selectionItemName}>{name}</Text>
+                        <Text style={styles.selectionItemDetail}>{detail}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          ) : null}
+        </>
+      );
+    }
+    return (
+      <>
+        <Text style={styles.fieldLabel}>Telegram chat</Text>
+        <Pressable
+          style={[
+            styles.selectInput,
+            contactError && !telegramChatId && styles.inputError,
+            (!connectionState.connected || telegramChatsLoading) && styles.selectInputDisabled,
+          ]}
+          onPress={() => {
+            if (!connectionState.connected) {
+              setContactError("Connect Telegram to select a chat.");
+              return;
+            }
+            if (telegramChatsLoading) return;
+            setTelegramPickerExpanded((prev) => !prev);
+            setSlackWorkspaceExpanded(false);
+            setSlackUsersExpanded(false);
+            setContactError(null);
+          }}
+        >
+          <Text style={telegramChatSummary ? styles.selectValue : styles.selectPlaceholder}>
+            {telegramChatsLoading ? "Loading chats…" : telegramChatSummary || "Select chat"}
+          </Text>
+          <Feather
+            name={telegramPickerExpanded ? "chevron-up" : "chevron-down"}
+            size={18}
+            color={Theme.palette.slate}
+          />
+        </Pressable>
+        {telegramChatsError ? <Text style={styles.helperTextError}>{telegramChatsError}</Text> : null}
+        {!telegramChatsLoading && telegramChats.length === 0 && !telegramChatsError ? (
+          <Text style={styles.helperText}>Start a Telegram conversation so it appears here.</Text>
+        ) : null}
+        {telegramPickerExpanded ? (
+          <View style={[styles.selectionList, styles.selectionListLarge]}>
+            {telegramChatsLoading ? (
+              <View style={styles.selectionEmpty}>
+                <ActivityIndicator color={Theme.palette.slate} />
+              </View>
+            ) : telegramChats.length === 0 ? (
+              <View style={styles.selectionEmpty}>
+                <Text style={styles.helperText}>No chats available.</Text>
+              </View>
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {telegramChats.map((chat) => {
+                  const chatId = String(chat.chat_id);
+                  const active = chatId === telegramChatId;
+                  const name = chat.participant_name || chat.title || `Chat ${chatId}`;
+                  const username = chat.participant_username
+                    ? chat.participant_username.startsWith("@")
+                      ? chat.participant_username
+                      : `@${chat.participant_username}`
+                    : "";
+                  const detail = username || chat.type || chat.last_message_at || "";
+                  return (
+                    <Pressable
+                      key={chatId}
+                      style={[styles.selectionItem, active && styles.selectionItemActive]}
+                      onPress={() => {
+                        setTelegramChatId(chatId);
+                        setTelegramUsername(username);
+                        setTelegramPickerExpanded(false);
+                        setContactError(null);
+                      }}
+                    >
+                      <Text style={styles.selectionItemName}>{name}</Text>
+                      {detail ? <Text style={styles.selectionItemDetail}>{detail}</Text> : null}
+                      {chat.last_message ? (
+                        <Text style={styles.selectionItemNote}>{chat.last_message}</Text>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        ) : null}
+      </>
+    );
   };
 
   return (
@@ -583,23 +1031,7 @@ export default function SendOptionsScreen() {
                 setContactLabel(text);
               }}
             />
-            {renderContactFields({
-              platform,
-              contactError,
-              setContactError,
-              contactEmail,
-              contactPhone,
-              slackTeamId,
-              slackUserId,
-              telegramChatId,
-              telegramUsername,
-              setContactEmail,
-              setContactPhone,
-              setSlackTeamId,
-              setSlackUserId,
-              setTelegramChatId,
-              setTelegramUsername,
-            })}
+            {renderContactFields()}
             {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
             <View style={styles.modalActions}>
               <Pressable
@@ -634,132 +1066,11 @@ function selectionLabel(mode: DispatchMode) {
   return mode === "self" ? "Send as you" : "Send on your behalf";
 }
 
-function renderContactFields({
-  platform,
-  contactError,
-  setContactError,
-  contactEmail,
-  contactPhone,
-  slackTeamId,
-  slackUserId,
-  telegramChatId,
-  telegramUsername,
-  setContactEmail,
-  setContactPhone,
-  setSlackTeamId,
-  setSlackUserId,
-  setTelegramChatId,
-  setTelegramUsername,
-}: {
-  platform: PlatformId;
-  contactError: string | null;
-  contactEmail: string;
-  contactPhone: string;
-  slackTeamId: string;
-  slackUserId: string;
-  telegramChatId: string;
-  telegramUsername: string;
-  setContactError: (value: string | null) => void;
-  setContactEmail: (value: string) => void;
-  setContactPhone: (value: string) => void;
-  setSlackTeamId: (value: string) => void;
-  setSlackUserId: (value: string) => void;
-  setTelegramChatId: (value: string) => void;
-  setTelegramUsername: (value: string) => void;
-}) {
-  if (platform === "gmail" || platform === "outlook") {
-    return (
-      <>
-        <Text style={styles.fieldLabel}>{platformMeta[platform].contactLabel}</Text>
-        <TextInput
-          style={[styles.input, contactError && styles.inputError]}
-          placeholder={platformMeta[platform].placeholder}
-          keyboardType={platformMeta[platform].keyboard as KeyboardTypeOptions}
-          autoCapitalize="none"
-          value={contactEmail}
-          onChangeText={(text) => {
-            setContactEmail(text);
-            setContactError(null);
-          }}
-        />
-      </>
-    );
-  }
-  if (platform === "whatsapp") {
-    return (
-      <>
-        <Text style={styles.fieldLabel}>WhatsApp number</Text>
-        <TextInput
-          style={[styles.input, contactError && styles.inputError]}
-          placeholder={platformMeta.whatsapp.placeholder}
-          keyboardType={platformMeta.whatsapp.keyboard as KeyboardTypeOptions}
-          autoCapitalize="none"
-          value={contactPhone}
-          onChangeText={(text) => {
-            setContactPhone(text);
-            setContactError(null);
-          }}
-        />
-      </>
-    );
-  }
-  if (platform === "slack") {
-    return (
-      <>
-        <Text style={styles.fieldLabel}>Slack workspace ID</Text>
-        <TextInput
-          style={[styles.input, contactError && styles.inputError]}
-          placeholder="T012ABC34"
-          autoCapitalize="none"
-          value={slackTeamId}
-          onChangeText={(text) => {
-            setSlackTeamId(text);
-            setContactError(null);
-          }}
-        />
-        <Text style={styles.fieldLabel}>Slack user ID</Text>
-        <TextInput
-          style={[styles.input, contactError && styles.inputError]}
-          placeholder="U045XYZ78"
-          autoCapitalize="none"
-          value={slackUserId}
-          onChangeText={(text) => {
-            setSlackUserId(text);
-            setContactError(null);
-          }}
-        />
-      </>
-    );
-  }
-  return (
-    <>
-      <Text style={styles.fieldLabel}>Telegram chat ID</Text>
-      <TextInput
-        style={[styles.input, contactError && styles.inputError]}
-        placeholder="123456789"
-        keyboardType="number-pad"
-        value={telegramChatId}
-        onChangeText={(text) => {
-          setTelegramChatId(text);
-          setContactError(null);
-        }}
-      />
-      <Text style={styles.fieldLabel}>Telegram username</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="@client"
-        autoCapitalize="none"
-        value={telegramUsername}
-        onChangeText={(text) => {
-          setTelegramUsername(text);
-          setContactError(null);
-        }}
-      />
-    </>
-  );
-}
-
-function validateContactFields(platform: PlatformId, fields: ContactFieldState): ValidationResult {
+function validateContactFields(
+  platform: PlatformId,
+  fields: ContactFieldState,
+  options?: { slackWorkspaceName?: string | null; slackUserName?: string | null; telegramChatSummary?: string | null },
+): ValidationResult {
   const trimmedLabel = fields.label.trim();
   if (!trimmedLabel) {
     return { valid: false, error: "Add a label so you recognize the contact later." };
@@ -794,7 +1105,18 @@ function validateContactFields(platform: PlatformId, fields: ContactFieldState):
   }
   if (platform === "slack") {
     if (!fields.slackTeamId.trim() || !fields.slackUserId.trim()) {
-      return { valid: false, error: "Slack requires both the workspace ID and user ID." };
+      return { valid: false, error: "Select a Slack workspace and person." };
+    }
+    const summaryParts: string[] = [];
+    if (options?.slackUserName?.trim()) {
+      summaryParts.push(options.slackUserName.trim());
+    }
+    if (options?.slackWorkspaceName?.trim()) {
+      summaryParts.push(options.slackWorkspaceName.trim());
+    }
+    if (summaryParts.length === 0) {
+      summaryParts.push(`User ${fields.slackUserId.trim()}`);
+      summaryParts.push(`Workspace ${fields.slackTeamId.trim()}`);
     }
     return {
       valid: true,
@@ -804,11 +1126,11 @@ function validateContactFields(platform: PlatformId, fields: ContactFieldState):
         slack_team_id: fields.slackTeamId.trim(),
         slack_user_id: fields.slackUserId.trim(),
       },
-      summary: `Workspace ${fields.slackTeamId.trim()} · User ${fields.slackUserId.trim()}`,
+      summary: summaryParts.join(" · "),
     };
   }
   if (!fields.telegramChatId.trim()) {
-    return { valid: false, error: "Enter the Telegram chat ID." };
+    return { valid: false, error: "Select a Telegram chat." };
   }
   return {
     valid: true,
@@ -818,9 +1140,11 @@ function validateContactFields(platform: PlatformId, fields: ContactFieldState):
       telegram_chat_id: fields.telegramChatId.trim(),
       telegram_username: fields.telegramUsername.trim() || undefined,
     },
-    summary: fields.telegramUsername.trim()
-      ? `${fields.telegramUsername.trim()} (${fields.telegramChatId.trim()})`
-      : fields.telegramChatId.trim(),
+    summary:
+      options?.telegramChatSummary ??
+      (fields.telegramUsername.trim()
+        ? `${fields.telegramUsername.trim()} (${fields.telegramChatId.trim()})`
+        : fields.telegramChatId.trim()),
   };
 }
 
@@ -1075,6 +1399,77 @@ const styles = StyleSheet.create({
   },
   inputError: {
     borderColor: Theme.palette.accent,
+  },
+  selectInput: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    fontSize: 15,
+    color: Theme.palette.ink,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectInputDisabled: {
+    opacity: 0.6,
+  },
+  selectValue: {
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  selectPlaceholder: {
+    fontSize: 15,
+    color: Theme.palette.slate,
+  },
+  selectionList: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    marginTop: Theme.spacing.xs,
+    maxHeight: 200,
+    backgroundColor: "#FFFFFF",
+  },
+  selectionListLarge: {
+    maxHeight: 260,
+  },
+  selectionItem: {
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.palette.border,
+  },
+  selectionItemActive: {
+    backgroundColor: Theme.palette.surface,
+  },
+  selectionItemName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  selectionItemDetail: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  selectionItemNote: {
+    fontSize: 12,
+    color: Theme.palette.inkMuted,
+    marginTop: 2,
+  },
+  selectionEmpty: {
+    padding: Theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  helperText: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  helperTextError: {
+    fontSize: 13,
+    color: Theme.palette.accent,
   },
   errorText: {
     fontSize: 13,

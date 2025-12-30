@@ -1,4 +1,5 @@
 import type { ContactMethod } from "./clients";
+import type { PaymentMethodDetails } from "./payment-methods";
 
 export type DeliveryChannel = "mailgun" | "gmail" | "outlook" | "whatsapp" | "telegram" | "slack" | "auto";
 export type ReminderTone = "gentle" | "neutral" | "firm";
@@ -53,11 +54,12 @@ export type Invoice = {
   contact_method_id: string;
   contact_method: ContactMethod;
   reminder_schedule: ReminderSchedulePayload;
-  payment_instructions: Record<string, unknown>[];
+  payment_instructions: PaymentMethodDetails[];
   stripe_invoice_url: string | null;
   paypal_invoice_url: string | null;
   created_at: string;
   updated_at: string;
+  paid_at?: string | null;
 };
 
 export type InvoiceCreatePayload = {

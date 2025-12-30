@@ -34,7 +34,12 @@ import {
   OutlookStatus,
 } from "@/services/outlook";
 import { SlackStatus, SlackUser, connectSlackAccount, fetchSlackStatus, fetchSlackUsers } from "@/services/slack";
-import { fetchTelegramChats, fetchTelegramStatus, TelegramChat, TelegramStatus } from "@/services/telegram";
+import {
+  TelegramContact,
+  TelegramStatus,
+  fetchTelegramContacts,
+  fetchTelegramStatus,
+} from "@/services/telegram";
 import type {
   ClientCreatePayload,
   ContactMethod,
@@ -133,9 +138,9 @@ export default function SendOptionsScreen() {
   const [slackUsersError, setSlackUsersError] = useState<string | null>(null);
   const [slackWorkspaceExpanded, setSlackWorkspaceExpanded] = useState(false);
   const [slackUsersExpanded, setSlackUsersExpanded] = useState(false);
-  const [telegramChats, setTelegramChats] = useState<TelegramChat[]>([]);
-  const [telegramChatsLoading, setTelegramChatsLoading] = useState(false);
-  const [telegramChatsError, setTelegramChatsError] = useState<string | null>(null);
+  const [telegramContacts, setTelegramContacts] = useState<TelegramContact[]>([]);
+  const [telegramContactsLoading, setTelegramContactsLoading] = useState(false);
+  const [telegramContactsError, setTelegramContactsError] = useState<string | null>(null);
   const [telegramPickerExpanded, setTelegramPickerExpanded] = useState(false);
   const slackWorkspaces = useMemo(() => slackStatusData?.workspaces ?? [], [slackStatusData]);
   const selectedSlackWorkspace = useMemo(() => {
@@ -148,10 +153,10 @@ export default function SendOptionsScreen() {
     const sourceList = workspaceUsers ?? slackUsers;
     return sourceList.find((user) => user.id === slackUserId) ?? null;
   }, [slackUserId, slackTeamId, slackUsers, slackUsersByWorkspace]);
-  const selectedTelegramChat = useMemo(() => {
+  const selectedTelegramContact = useMemo(() => {
     if (!telegramChatId) return null;
-    return telegramChats.find((chat) => String(chat.chat_id) === telegramChatId) ?? null;
-  }, [telegramChatId, telegramChats]);
+    return telegramContacts.find((contact) => String(contact.chat_id) === telegramChatId) ?? null;
+  }, [telegramChatId, telegramContacts]);
   const [contactError, setContactError] = useState<string | null>(null);
   const [savingClient, setSavingClient] = useState(false);
   const [selectionRequiresConnection, setSelectionRequiresConnection] = useState(
@@ -401,37 +406,37 @@ export default function SendOptionsScreen() {
 
   useEffect(() => {
     if (platform !== "telegram") {
-      setTelegramChats([]);
-      setTelegramChatsError(null);
-      setTelegramChatsLoading(false);
+      setTelegramContacts([]);
+      setTelegramContactsError(null);
+      setTelegramContactsLoading(false);
       setTelegramPickerExpanded(false);
       return;
     }
     if (!session?.accessToken || !connectionState.connected) {
-      setTelegramChats([]);
-      setTelegramChatsLoading(false);
+      setTelegramContacts([]);
+      setTelegramContactsLoading(false);
       return;
     }
     let cancelled = false;
-    setTelegramChatsError(null);
-    setTelegramChatsLoading(true);
-    fetchTelegramChats(session.accessToken)
-      .then((chats) => {
+    setTelegramContactsError(null);
+    setTelegramContactsLoading(true);
+    fetchTelegramContacts(session.accessToken)
+      .then((contacts) => {
         if (cancelled) return;
-        const normalized = chats
-          .map((chat) => ({
-            ...chat,
-            chat_id: chat.chat_id != null ? String(chat.chat_id) : "",
+        const normalized = contacts
+          .map((contact) => ({
+            ...contact,
+            chat_id: contact.chat_id != null ? String(contact.chat_id) : "",
           }))
-          .filter((chat) => chat.chat_id);
-        setTelegramChats(normalized);
-        if (telegramChatId && normalized.some((chat) => chat.chat_id === telegramChatId)) {
-          const currentChat = normalized.find((chat) => chat.chat_id === telegramChatId);
-          if (currentChat?.participant_username) {
-            const handle = currentChat.participant_username.startsWith("@")
-              ? currentChat.participant_username
-              : `@${currentChat.participant_username}`;
+          .filter((contact) => contact.chat_id);
+        setTelegramContacts(normalized);
+        const current = normalized.find((contact) => contact.chat_id === telegramChatId);
+        if (current) {
+          if (current.username) {
+            const handle = current.username.startsWith("@") ? current.username : `@${current.username}`;
             setTelegramUsername(handle);
+          } else {
+            setTelegramUsername("");
           }
         } else {
           setTelegramChatId("");
@@ -440,12 +445,12 @@ export default function SendOptionsScreen() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setTelegramChats([]);
-        setTelegramChatsError(err instanceof Error ? err.message : "Unable to load Telegram chats.");
+        setTelegramContacts([]);
+        setTelegramContactsError(err instanceof Error ? err.message : "Unable to load Telegram contacts.");
       })
       .finally(() => {
         if (cancelled) return;
-        setTelegramChatsLoading(false);
+        setTelegramContactsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -499,26 +504,26 @@ export default function SendOptionsScreen() {
     : "";
   const slackUserLabel =
     selectedSlackUser?.real_name || selectedSlackUser?.display_name || selectedSlackUser?.name || "";
-  const telegramChatSummary = useMemo(() => {
-    if (!selectedTelegramChat) {
+  const telegramContactSummary = useMemo(() => {
+    if (!selectedTelegramContact) {
       return null;
     }
     const parts: string[] = [];
-    const primary = selectedTelegramChat.participant_name || selectedTelegramChat.title;
+    const primary = selectedTelegramContact.name;
     if (primary) {
       parts.push(primary);
     }
-    if (selectedTelegramChat.participant_username) {
-      const username = selectedTelegramChat.participant_username.startsWith("@")
-        ? selectedTelegramChat.participant_username
-        : `@${selectedTelegramChat.participant_username}`;
+    if (selectedTelegramContact.username) {
+      const username = selectedTelegramContact.username.startsWith("@")
+        ? selectedTelegramContact.username
+        : `@${selectedTelegramContact.username}`;
       parts.push(username);
     }
     if (parts.length === 0) {
-      return `Chat ${selectedTelegramChat.chat_id}`;
+      return `Chat ${selectedTelegramContact.chat_id}`;
     }
     return parts.join(" · ");
-  }, [selectedTelegramChat]);
+  }, [selectedTelegramContact]);
 
   const openContactModal = () => {
     setContactError(null);
@@ -538,7 +543,7 @@ export default function SendOptionsScreen() {
     const validation = validateContactFields(platform, fields, {
       slackWorkspaceName: slackWorkspaceLabel,
       slackUserName: slackUserLabel,
-      telegramChatSummary,
+      telegramContactSummary,
     });
     if (!validation.valid) {
       setContactError(validation.error);
@@ -778,22 +783,22 @@ export default function SendOptionsScreen() {
           style={[
             styles.selectInput,
             contactError && !telegramChatId && styles.inputError,
-            (!connectionState.connected || telegramChatsLoading) && styles.selectInputDisabled,
+            (!connectionState.connected || telegramContactsLoading) && styles.selectInputDisabled,
           ]}
           onPress={() => {
             if (!connectionState.connected) {
               setContactError("Connect Telegram to select a chat.");
               return;
             }
-            if (telegramChatsLoading) return;
+            if (telegramContactsLoading) return;
             setTelegramPickerExpanded((prev) => !prev);
             setSlackWorkspaceExpanded(false);
             setSlackUsersExpanded(false);
             setContactError(null);
           }}
         >
-          <Text style={telegramChatSummary ? styles.selectValue : styles.selectPlaceholder}>
-            {telegramChatsLoading ? "Loading chats…" : telegramChatSummary || "Select chat"}
+          <Text style={telegramContactSummary ? styles.selectValue : styles.selectPlaceholder}>
+            {telegramContactsLoading ? "Loading chats…" : telegramContactSummary || "Select chat"}
           </Text>
           <Feather
             name={telegramPickerExpanded ? "chevron-up" : "chevron-down"}
@@ -801,32 +806,36 @@ export default function SendOptionsScreen() {
             color={Theme.palette.slate}
           />
         </Pressable>
-        {telegramChatsError ? <Text style={styles.helperTextError}>{telegramChatsError}</Text> : null}
-        {!telegramChatsLoading && telegramChats.length === 0 && !telegramChatsError ? (
+        {telegramContactsError ? <Text style={styles.helperTextError}>{telegramContactsError}</Text> : null}
+        {!telegramContactsLoading && telegramContacts.length === 0 && !telegramContactsError ? (
           <Text style={styles.helperText}>Start a Telegram conversation so it appears here.</Text>
         ) : null}
         {telegramPickerExpanded ? (
           <View style={[styles.selectionList, styles.selectionListLarge]}>
-            {telegramChatsLoading ? (
+            {telegramContactsLoading ? (
               <View style={styles.selectionEmpty}>
                 <ActivityIndicator color={Theme.palette.slate} />
               </View>
-            ) : telegramChats.length === 0 ? (
+            ) : telegramContacts.length === 0 ? (
               <View style={styles.selectionEmpty}>
                 <Text style={styles.helperText}>No chats available.</Text>
               </View>
             ) : (
               <ScrollView keyboardShouldPersistTaps="handled">
-                {telegramChats.map((chat) => {
-                  const chatId = String(chat.chat_id);
+                {telegramContacts.map((contact) => {
+                  const chatId = String(contact.chat_id);
                   const active = chatId === telegramChatId;
-                  const name = chat.participant_name || chat.title || `Chat ${chatId}`;
-                  const username = chat.participant_username
-                    ? chat.participant_username.startsWith("@")
-                      ? chat.participant_username
-                      : `@${chat.participant_username}`
+                  const name = contact.name || contact.username || `Chat ${chatId}`;
+                  const username = contact.username
+                    ? contact.username.startsWith("@")
+                      ? contact.username
+                      : `@${contact.username}`
                     : "";
-                  const detail = username || chat.type || chat.last_message_at || "";
+                  const detailParts: string[] = [];
+                  if (username) detailParts.push(username);
+                  if (contact.assigned_client_id) detailParts.push("Linked client");
+                  const detail = detailParts.join(" · ");
+                  const lastMessage = contact.last_message || null;
                   return (
                     <Pressable
                       key={chatId}
@@ -840,8 +849,10 @@ export default function SendOptionsScreen() {
                     >
                       <Text style={styles.selectionItemName}>{name}</Text>
                       {detail ? <Text style={styles.selectionItemDetail}>{detail}</Text> : null}
-                      {chat.last_message ? (
-                        <Text style={styles.selectionItemNote}>{chat.last_message}</Text>
+                      {lastMessage ? (
+                        <Text style={styles.selectionItemNote} numberOfLines={2}>
+                          {lastMessage}
+                        </Text>
                       ) : null}
                     </Pressable>
                   );
@@ -1069,7 +1080,11 @@ function selectionLabel(mode: DispatchMode) {
 function validateContactFields(
   platform: PlatformId,
   fields: ContactFieldState,
-  options?: { slackWorkspaceName?: string | null; slackUserName?: string | null; telegramChatSummary?: string | null },
+  options?: {
+    slackWorkspaceName?: string | null;
+    slackUserName?: string | null;
+    telegramContactSummary?: string | null;
+  },
 ): ValidationResult {
   const trimmedLabel = fields.label.trim();
   if (!trimmedLabel) {
@@ -1141,7 +1156,7 @@ function validateContactFields(
       telegram_username: fields.telegramUsername.trim() || undefined,
     },
     summary:
-      options?.telegramChatSummary ??
+      options?.telegramContactSummary ??
       (fields.telegramUsername.trim()
         ? `${fields.telegramUsername.trim()} (${fields.telegramChatId.trim()})`
         : fields.telegramChatId.trim()),

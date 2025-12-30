@@ -3,6 +3,11 @@ import { apiFetch, toQueryString } from "@/lib/api-client";
 export type NotificationSettings = {
   push_notifications: boolean;
   messages: boolean;
+  reminder_pre_notifications?: {
+    enabled: boolean;
+    count: number;
+    lead_minutes: number;
+  };
 };
 
 export type AuthUser = {

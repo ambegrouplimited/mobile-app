@@ -44,6 +44,11 @@ type SessionState = {
 type NotificationSettingsPayload = {
   push_notifications?: boolean;
   messages?: boolean;
+  reminder_pre_notifications?: {
+    enabled?: boolean;
+    count?: number;
+    lead_minutes?: number;
+  };
 };
 
 type AuthContextValue = {

@@ -7,15 +7,13 @@ export type TelegramConnection = {
   telegram_username?: string;
 };
 
-export type TelegramChat = {
+export type TelegramContact = {
   chat_id: string;
-  title?: string | null;
-  type?: string | null;
-  participant_name?: string | null;
-  participant_username?: string | null;
+  name?: string | null;
+  username?: string | null;
   assigned_client_id?: string | null;
-  last_message_at?: string | null;
   last_message?: string | null;
+  last_message_at?: string | null;
 };
 
 export type TelegramStatus = {
@@ -23,7 +21,7 @@ export type TelegramStatus = {
   has_business_connection: boolean;
   onboarding_url?: string;
   connection: TelegramConnection | null;
-  chats: TelegramChat[];
+  chats: TelegramContact[];
 };
 
 export function fetchTelegramStatus(token: string) {
@@ -33,8 +31,8 @@ export function fetchTelegramStatus(token: string) {
   });
 }
 
-export function fetchTelegramChats(token: string) {
-  return apiFetch<TelegramChat[]>("/api/messaging/telegram/chats", {
+export function fetchTelegramContacts(token: string) {
+  return apiFetch<TelegramContact[]>("/api/messaging/telegram/contacts", {
     method: "GET",
     token,
   });

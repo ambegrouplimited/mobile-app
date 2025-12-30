@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 type CacheEntry<T> = {
   data: T;
@@ -7,7 +7,7 @@ type CacheEntry<T> = {
 
 export async function getCachedValue<T>(key: string): Promise<T | null> {
   try {
-    const stored = await SecureStore.getItemAsync(key);
+    const stored = await AsyncStorage.getItem(key);
     if (!stored) {
       return null;
     }
@@ -25,7 +25,7 @@ export async function setCachedValue<T>(key: string, data: T): Promise<void> {
       data,
       timestamp: Date.now(),
     };
-    await SecureStore.setItemAsync(key, JSON.stringify(entry));
+    await AsyncStorage.setItem(key, JSON.stringify(entry));
   } catch (error) {
     console.warn(`Failed to write cache for ${key}`, error);
   }
@@ -33,7 +33,7 @@ export async function setCachedValue<T>(key: string, data: T): Promise<void> {
 
 export async function clearCachedValue(key: string): Promise<void> {
   try {
-    await SecureStore.deleteItemAsync(key);
+    await AsyncStorage.removeItem(key);
   } catch (error) {
     console.warn(`Failed to clear cache for ${key}`, error);
   }

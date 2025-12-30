@@ -2,7 +2,9 @@ import { Feather } from "@expo/vector-icons";
 import { Asset } from "expo-asset";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,54 +13,137 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import BankBadge from "@/assets/iban.png";
 import { Theme } from "@/constants/theme";
 import {
-  ClientType,
   clientProfiles,
+  ClientType,
   PaymentMethod,
   ReminderSchedule,
 } from "@/data/mock-clients";
+import { paymentLogos } from "@/data/payment-methods";
+import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { useAuth } from "@/providers/auth-provider";
+import { fetchClient } from "@/services/clients";
+import { fetchInvoices } from "@/services/invoices";
+import type { Client, ContactMethod } from "@/types/clients";
+import type { Invoice } from "@/types/invoices";
+import type {
+  PaymentMethodDetails,
+  PaymentMethodType,
+} from "@/types/payment-methods";
 
-import BankBadge from "@/assets/iban.png";
+type PaymentInstruction = PaymentMethodDetails;
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const PAYMENT_LOGO_URIS = {
-  stripe: Asset.fromModule(require("@/assets/stripe.svg")).uri,
-  paypal: Asset.fromModule(require("@/assets/paypal.svg")).uri,
-  venmo: Asset.fromModule(require("@/assets/venmo.svg")).uri,
-  cashapp: Asset.fromModule(require("@/assets/cashapp.svg")).uri,
-  revolut: Asset.fromModule(require("@/assets/revolut.svg")).uri,
-  wise: Asset.fromModule(require("@/assets/wise.svg")).uri,
-  zelle: Asset.fromModule(require("@/assets/zelle.svg")).uri,
-  n26: Asset.fromModule(require("@/assets/n26.svg")).uri,
-  bank: null,
+const CONTACT_LOGOS = {
+  email: Asset.fromModule(require("@/assets/contactPlatforms/inbox.svg")).uri,
+  whatsapp: Asset.fromModule(require("@/assets/contactPlatforms/whatsapp.svg"))
+    .uri,
+  telegram: Asset.fromModule(require("@/assets/contactPlatforms/telegram.svg"))
+    .uri,
+  slack: Asset.fromModule(require("@/assets/contactPlatforms/slack.svg")).uri,
 } as const;
 
-type PaymentLogoKey = keyof typeof PAYMENT_LOGO_URIS;
+type PaymentLogoKey = keyof typeof paymentLogos;
+const CLIENT_CACHE_KEY = (id: string) => `cache.client.${id}`;
+const CLIENT_INVOICES_CACHE_KEY = (id: string) => `cache.client.${id}.invoices`;
 
 export default function ClientDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const profile = id ? clientProfiles[id] : undefined;
+  const { session } = useAuth();
+  const [client, setClient] = useState<Client | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!profile) {
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+
+  const reminders = useMemo(() => {
+    if (id && clientProfiles[id]?.reminders?.length) {
+      return clientProfiles[id].reminders;
+    }
+    const firstProfile = Object.values(clientProfiles)[0];
+    return firstProfile ? firstProfile.reminders : [];
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    const hydrate = async () => {
+      const [cachedClient, cachedInvoices] = await Promise.all([
+        getCachedValue<Client>(CLIENT_CACHE_KEY(id)),
+        getCachedValue<Invoice[]>(CLIENT_INVOICES_CACHE_KEY(id)),
+      ]);
+      if (cancelled) return;
+      if (cachedClient) setClient(cachedClient);
+      if (cachedInvoices) setInvoices(cachedInvoices);
+    };
+    hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  useEffect(() => {
+    const loadClient = async () => {
+      if (!id || !session?.accessToken) {
+        setClient(null);
+        setInvoices([]);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const [clientResult, invoiceResult] = await Promise.all([
+          fetchClient(id, session.accessToken),
+          fetchInvoices(session.accessToken, { client_id: id }),
+        ]);
+        setClient(clientResult);
+        setInvoices(invoiceResult);
+        await Promise.all([
+          setCachedValue(CLIENT_CACHE_KEY(id), clientResult),
+          setCachedValue(CLIENT_INVOICES_CACHE_KEY(id), invoiceResult),
+        ]);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load this client right now."
+        );
+        setClient(null);
+        setInvoices([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadClient();
+  }, [id, session?.accessToken]);
+
+  if (!id) {
+    return <NotFoundState onBack={() => router.back()} />;
+  }
+
+  if (loading && !client) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>Client not found</Text>
-          <Text style={styles.emptyDetail}>
-            Try selecting a client from the dashboard.
-          </Text>
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>Go back</Text>
-          </Pressable>
+        <View style={styles.loadingState}>
+          <ActivityIndicator size="large" color={Theme.palette.ink} />
+          <Text style={styles.loadingText}>Loading client…</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  const { client, reminders } = profile;
+  if (error || !client) {
+    return (
+      <NotFoundState
+        onBack={() => router.back()}
+        message={error ?? undefined}
+      />
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -72,17 +157,28 @@ export default function ClientDetailScreen() {
           <View style={styles.heroHeader}>
             <Text style={styles.title}>{client.name}</Text>
             <View style={styles.clientTypeBadge}>
-              <Text style={styles.clientTypeLabel}>{formatClientType(client.client_type)}</Text>
+              <Text style={styles.clientTypeLabel}>
+                {formatClientType(client.client_type)}
+              </Text>
             </View>
           </View>
-          <Text style={styles.subtitle}>{client.company_name}</Text>
+          {client.company_name ? (
+            <Text style={styles.subtitle}>{client.company_name}</Text>
+          ) : null}
         </View>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Contact</Text>
-          <InfoRow label="Email" value={client.email} />
-          <InfoRow label="Phone" value={client.phone} />
-          <InfoRow label="Notes" value={client.notes || "—"} />
+          {client.contact_methods?.length ? (
+            client.contact_methods.map((method) => (
+              <ContactMethodRow key={method.id} method={method} />
+            ))
+          ) : (
+            <Text style={styles.emptyDetail}>
+              No contact methods saved yet.
+            </Text>
+          )}
+          {client.notes ? <InfoRow label="Notes" value={client.notes} /> : null}
           <InfoRow
             label="Added"
             value={new Date(client.created_at).toLocaleDateString()}
@@ -95,38 +191,93 @@ export default function ClientDetailScreen() {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Reminders</Text>
-          {reminders.length === 0 ? (
+          {invoices.length === 0 ? (
             <Text style={styles.emptyDetail}>
               No reminders on record for this client.
             </Text>
           ) : (
-            reminders.map((reminder) => (
-              <View key={reminder.id} style={styles.reminderBlock}>
+            invoices.map((invoice) => (
+              <View key={invoice.id} style={styles.reminderBlock}>
                 <View style={styles.reminderHeader}>
                   <Text style={styles.reminderAmount}>
-                    {reminder.currency} {reminder.amount.toLocaleString()}
+                    {formatCurrency(invoice.amount, invoice.currency)}
                   </Text>
-                  <Text style={styles.reminderStatus}>{reminder.status}</Text>
+                  <Text style={styles.reminderStatus}>{invoice.status}</Text>
                 </View>
-                <Text style={styles.reminderDesc}>{reminder.description}</Text>
+                <Text style={styles.reminderDesc}>
+                  {invoice.description || "No notes added."}
+                </Text>
                 <InfoRow
                   label="Due date"
-                  value={formatFriendlyDate(reminder.due_date, true)}
+                  value={formatFriendlyDate(invoice.due_date, true)}
                 />
                 <InfoRow
                   label="Delivery channel"
-                  value={formatSendVia(reminder.send_via)}
+                  value={formatSendVia(invoice.send_via)}
                 />
-                <ScheduleDetails
-                  schedule={reminder.reminder_schedule}
-                  dueDate={reminder.due_date}
-                />
-                <PaymentMethodCard method={reminder.payment_method} />
+                {invoice.reminder_schedule ? (
+                  <ScheduleDetails
+                    schedule={invoice.reminder_schedule as ReminderSchedule}
+                    dueDate={invoice.due_date || ""}
+                  />
+                ) : null}
+                {invoice.payment_instructions?.length ? (
+                  invoice.payment_instructions.map((instruction, idx) => (
+                    <PaymentInstructionCard
+                      key={`${invoice.id}-${instruction.type}-${idx}`}
+                      instruction={instruction}
+                    />
+                  ))
+                ) : reminders[0]?.payment_method ? (
+                  <PaymentMethodCard method={reminders[0].payment_method} />
+                ) : null}
               </View>
             ))
           )}
         </View>
       </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function ContactMethodRow({ method }: { method: ContactMethod }) {
+  const icon = selectContactIcon(method);
+  const value = formatContactValue(method);
+  return (
+    <View style={styles.contactRow}>
+      {icon ? (
+        <Image
+          source={{ uri: icon }}
+          style={styles.contactLogo}
+          contentFit="contain"
+        />
+      ) : null}
+      <View style={styles.contactText}>
+        <Text style={styles.contactValue}>{value || "—"}</Text>
+        <Text style={styles.contactLabel}>{formatContactLabel(method)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function NotFoundState({
+  onBack,
+  message,
+}: {
+  onBack: () => void;
+  message?: string;
+}) {
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyTitle}>Client not found</Text>
+        <Text style={styles.emptyDetail}>
+          {message || "Try selecting a client from the dashboard."}
+        </Text>
+        <Pressable style={styles.backButton} onPress={onBack}>
+          <Text style={styles.backButtonText}>Go back</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -144,12 +295,8 @@ function formatSendVia(channel: string) {
   if (channel === "mailgun") {
     return "Sent on your behalf";
   }
-  const normalized = channel.toLowerCase();
-  const readable =
-    normalized === "gmail" || normalized === "outlook"
-      ? normalized
-      : "your channel";
-  return `Sent as you from ${readable}`;
+  const name = channel.charAt(0).toUpperCase() + channel.slice(1);
+  return `Sent as you from ${name}`;
 }
 
 function ScheduleDetails({
@@ -157,7 +304,7 @@ function ScheduleDetails({
   dueDate,
 }: {
   schedule: ReminderSchedule;
-  dueDate: string;
+  dueDate?: string | null;
 }) {
   if (schedule.mode === "manual") {
     return (
@@ -256,8 +403,12 @@ type PaymentPresentation = {
   logo: PaymentLogoKey;
 };
 
-function PaymentMethodCard({ method }: { method: PaymentMethod }) {
-  const presentation = buildPaymentPresentation(method);
+function PaymentInstructionCard({
+  instruction,
+}: {
+  instruction: PaymentInstruction;
+}) {
+  const presentation = buildInstructionPresentation(instruction);
   return (
     <View style={styles.paymentCard}>
       <View style={styles.paymentHeader}>
@@ -289,178 +440,250 @@ function PaymentMethodCard({ method }: { method: PaymentMethod }) {
   );
 }
 
-function buildPaymentPresentation(method: PaymentMethod): PaymentPresentation {
-  const subtitle = "label" in method ? method.label : undefined;
-  const note = method.instructions;
-  switch (method.kind) {
+function PaymentMethodCard({ method }: { method: PaymentMethod }) {
+  return <PaymentInstructionCard instruction={convertMockPayment(method)} />;
+}
+
+function convertMockPayment(method: PaymentMethod): PaymentInstruction {
+  const base: PaymentInstruction = {
+    type: method.kind as PaymentMethodType,
+    label: method.label ?? formatTypeLabel(method.kind as PaymentMethodType),
+    instructions: method.instructions ?? undefined,
+  };
+  if ("url" in method && method.url) {
+    base.url = method.url;
+  }
+  if ("handle" in method && method.handle) {
+    base.handle = method.handle;
+  }
+  if ("ach_bank_name" in method) {
+    base.ach_bank_name = method.ach_bank_name;
+    base.ach_account_number = method.ach_account_number;
+    base.ach_routing_number = method.ach_routing_number;
+    base.ach_account_type = method.ach_account_type;
+  }
+  if ("zelle_email" in method || "zelle_phone" in method) {
+    base.zelle_email = method.zelle_email ?? undefined;
+    base.zelle_phone = method.zelle_phone ?? undefined;
+  }
+  if ("iban" in method) {
+    base.iban = method.iban;
+    base.bic = method.bic;
+  }
+  if ("wallet_address" in method) {
+    base.wallet_address = method.wallet_address;
+    base.wallet_network = method.wallet_network;
+    base.wallet_memo = method.wallet_memo;
+  }
+  if ("account_name" in method) {
+    base.account_name = method.account_name;
+  }
+  return base;
+}
+
+function buildInstructionPresentation(
+  instruction: PaymentInstruction
+): PaymentPresentation {
+  const title = instruction.label || formatTypeLabel(instruction.type);
+  const subtitle = instruction.label
+    ? formatTypeLabel(instruction.type)
+    : undefined;
+  const note = instruction.instructions ?? undefined;
+  const rows: PaymentDetailRow[] = [];
+
+  pushRow(rows, "Account name", instruction.account_name);
+
+  switch (instruction.type) {
     case "stripe_link":
-      return {
-        title: "Stripe link",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "stripe",
-      };
     case "paypal_link":
-      return {
-        title: "PayPal checkout",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "paypal",
-      };
     case "venmo_link":
-      return {
-        title: "Venmo link",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "venmo",
-      };
     case "cashapp_link":
-      return {
-        title: "Cash App link",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "cashapp",
-      };
     case "revolut_link":
-      return {
-        title: "Revolut link",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "revolut",
-      };
     case "wise_link":
-      return {
-        title: "Wise link",
-        subtitle,
-        rows: [{ label: "Payment link", value: method.url }],
-        note,
-        logo: "wise",
-      };
+      pushRow(rows, "Payment link", instruction.url);
+      break;
     case "paypal_handle":
-      return {
-        title: "PayPal handle",
-        subtitle,
-        rows: [{ label: "Handle", value: method.handle }],
-        note,
-        logo: "paypal",
-      };
     case "venmo_handle":
-      return {
-        title: "Venmo handle",
-        subtitle,
-        rows: [{ label: "Handle", value: method.handle }],
-        note,
-        logo: "venmo",
-      };
     case "cashapp_handle":
-      return {
-        title: "Cash App handle",
-        subtitle,
-        rows: [{ label: "Handle", value: method.handle }],
-        note,
-        logo: "cashapp",
-      };
-    case "ach": {
-      const rows: PaymentDetailRow[] = [
-        { label: "Bank", value: method.ach_bank_name },
-        { label: "Account", value: method.ach_account_number },
-        { label: "Routing number", value: method.ach_routing_number },
-      ];
-      if (method.ach_account_type) {
-        rows.push({ label: "Account type", value: method.ach_account_type });
-      }
-      return {
-        title: "ACH transfer",
-        rows,
-        note,
-        logo: "bank",
-      };
-    }
-    case "zelle": {
-      const rows: PaymentDetailRow[] = [];
-      if (method.zelle_email) {
-        rows.push({ label: "Email", value: method.zelle_email });
-      }
-      if (method.zelle_phone) {
-        rows.push({ label: "Phone", value: method.zelle_phone });
-      }
-      return {
-        title: "Zelle",
-        subtitle,
-        rows,
-        note,
-        logo: "zelle",
-      };
-    }
-    case "sepa": {
-      const rows: PaymentDetailRow[] = [{ label: "IBAN", value: method.iban }];
-      if (method.bic) {
-        rows.push({ label: "BIC", value: method.bic });
-      }
-      return {
-        title: "SEPA transfer",
-        subtitle,
-        rows,
-        note,
-        logo: "bank",
-      };
-    }
+      pushRow(rows, "Handle", instruction.handle);
+      break;
+    case "ach":
+      pushRow(rows, "Bank", instruction.ach_bank_name);
+      pushRow(rows, "Account", instruction.ach_account_number);
+      pushRow(rows, "Routing number", instruction.ach_routing_number);
+      pushRow(rows, "Account type", instruction.ach_account_type);
+      break;
+    case "zelle":
+      pushRow(rows, "Email", instruction.zelle_email);
+      pushRow(rows, "Phone", instruction.zelle_phone);
+      break;
+    case "sepa":
+      pushRow(rows, "IBAN", instruction.iban);
+      pushRow(rows, "BIC", instruction.bic);
+      break;
     case "revolut_account":
-      return {
-        title: "Revolut account",
-        subtitle,
-        rows: [
-          { label: "IBAN", value: method.iban },
-          { label: "BIC", value: method.bic },
-        ],
-        note,
-        logo: "revolut",
-      };
     case "wise_account":
-      return {
-        title: "Wise account",
-        subtitle,
-        rows: [
-          { label: "IBAN", value: method.iban },
-          { label: "BIC", value: method.bic },
-        ],
-        note,
-        logo: "wise",
-      };
     case "n26_account":
-      return {
-        title: "N26 account",
-        subtitle,
-        rows: [
-          { label: "IBAN", value: method.iban },
-          { label: "BIC", value: method.bic },
-        ],
-        note,
-        logo: "n26",
-      };
+      pushRow(rows, "IBAN", instruction.iban);
+      pushRow(rows, "BIC", instruction.bic);
+      break;
+    case "crypto_xrp":
+    case "crypto_btc":
+    case "crypto_eth":
+    case "crypto_usdc":
+    case "crypto_usdt":
+    case "crypto_sol":
+    case "crypto_bnb":
+    case "crypto_doge":
+    case "crypto_avax":
+    case "crypto_tron":
+    case "crypto_ton":
+    case "crypto_monero":
+    case "crypto_other":
+      pushRow(rows, "Wallet address", instruction.wallet_address);
+      pushRow(rows, "Network", instruction.wallet_network);
+      pushRow(rows, "Memo / Tag", instruction.wallet_memo);
+      break;
+    case "custom":
+      pushRow(rows, "Instructions", instruction.instructions);
+      break;
     default:
-      return {
-        title: "Payment method",
-        rows: [],
-        note,
-        logo: "bank",
-      };
+      break;
+  }
+
+  return {
+    title,
+    subtitle,
+    rows:
+      rows.length > 0 ? rows : [{ label: "Instructions", value: note || "—" }],
+    note,
+    logo: instructionLogoForType(instruction.type),
+  };
+}
+
+function pushRow(
+  rows: PaymentDetailRow[],
+  label: string,
+  value?: string | null
+) {
+  if (!value) return;
+  rows.push({ label, value });
+}
+
+function instructionLogoForType(type: PaymentMethodType): PaymentLogoKey {
+  if (type.startsWith("crypto_")) {
+    const key = type.replace("crypto_", "") as PaymentLogoKey;
+    return key in paymentLogos ? key : "btc";
+  }
+  switch (type) {
+    case "stripe_link":
+      return "stripe";
+    case "paypal_link":
+    case "paypal_handle":
+      return "paypal";
+    case "venmo_link":
+    case "venmo_handle":
+      return "venmo";
+    case "cashapp_link":
+    case "cashapp_handle":
+      return "cashapp";
+    case "revolut_link":
+    case "revolut_account":
+      return "revolut";
+    case "wise_link":
+    case "wise_account":
+      return "wise";
+    case "n26_account":
+      return "n26";
+    case "zelle":
+      return "zelle";
+    case "sepa":
+      return "iban";
+    case "ach":
+      return "bank";
+    default:
+      return "bank";
   }
 }
 
+function formatTypeLabel(type: PaymentMethodType) {
+  if (type.startsWith("crypto_")) {
+    return type.replace("crypto_", "").toUpperCase() + " wallet";
+  }
+  return type.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function PaymentLogo({ logo }: { logo: PaymentLogoKey }) {
-  const uri = PAYMENT_LOGO_URIS[logo];
+  const uri = paymentLogos[logo];
   const source = uri ? { uri } : BankBadge;
-  return <Image source={source} style={styles.paymentLogo} contentFit="contain" />;
+  return (
+    <Image source={source} style={styles.paymentLogo} contentFit="contain" />
+  );
 }
 
 function formatClientType(value: ClientType) {
   return value === "individual" ? "Individual" : "Business";
+}
+
+function formatContactPlatform(type: ContactMethod["type"]) {
+  switch (type) {
+    case "email":
+    case "email_gmail":
+    case "email_outlook":
+      return "Email";
+    case "whatsapp":
+      return "WhatsApp";
+    case "telegram":
+      return "Telegram";
+    case "slack":
+      return "Slack";
+    default:
+      return type;
+  }
+}
+
+function selectContactIcon(method: ContactMethod) {
+  if (method.type === "whatsapp") return CONTACT_LOGOS.whatsapp;
+  if (method.type === "telegram") return CONTACT_LOGOS.telegram;
+  if (method.type === "slack") return CONTACT_LOGOS.slack;
+  if (
+    method.type === "email" ||
+    method.type === "email_gmail" ||
+    method.type === "email_outlook"
+  ) {
+    return CONTACT_LOGOS.email;
+  }
+  return null;
+}
+
+function formatContactValue(method: ContactMethod) {
+  switch (method.type) {
+    case "email":
+    case "email_gmail":
+    case "email_outlook":
+      return method.email;
+    case "whatsapp":
+      return method.phone;
+    case "telegram":
+      return method.telegram_username || method.telegram_chat_id;
+    case "slack":
+      return method.slack_user_id
+        ? `${method.slack_user_id}`
+        : method.slack_team_id;
+    default:
+      return method.email || method.phone || "";
+  }
+}
+
+function formatContactLabel(method: ContactMethod) {
+  const isEmail =
+    method.type === "email" ||
+    method.type === "email_gmail" ||
+    method.type === "email_outlook";
+  if (isEmail) {
+    return "Email contact";
+  }
+  return method.label || formatContactPlatform(method.type);
 }
 
 function formatTime(value: string) {
@@ -478,8 +701,10 @@ function formatTimeFromISO(value: string) {
   });
 }
 
-function formatFriendlyDate(value: string, long?: boolean) {
+function formatFriendlyDate(value?: string | null, long?: boolean) {
+  if (!value) return "—";
   const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
   if (long) {
     return date.toLocaleDateString([], {
       day: "numeric",
@@ -518,6 +743,16 @@ function nextTone(sequence: string[], index: number) {
     return "neutral";
   }
   return sequence[index % sequence.length];
+}
+
+function formatCurrency(amount: number, currency = "USD") {
+  const value = Number(amount);
+  if (Number.isNaN(value)) return "—";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 function ToneBadge({
@@ -881,6 +1116,15 @@ const styles = StyleSheet.create({
     color: Theme.palette.inkMuted,
     textAlign: "center",
   },
+  loadingState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+  },
+  loadingText: {
+    color: Theme.palette.slate,
+  },
   backButton: {
     paddingHorizontal: Theme.spacing.lg,
     paddingVertical: Theme.spacing.md,
@@ -891,5 +1135,41 @@ const styles = StyleSheet.create({
   backButtonText: {
     color: Theme.palette.ink,
     fontSize: 15,
+  },
+  contactRow: {
+    borderRadius: Theme.radii.md,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    padding: Theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.md,
+  },
+  contactLogo: {
+    width: 28,
+    height: 28,
+  },
+  contactText: {
+    flex: 1,
+    gap: 2,
+  },
+  contactLabel: {
+    fontSize: 12,
+    color: Theme.palette.slate,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  contactValue: {
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  contactTag: {
+    paddingHorizontal: Theme.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: Theme.radii.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    color: Theme.palette.slate,
+    fontSize: 12,
   },
 });

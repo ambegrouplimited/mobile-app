@@ -12,14 +12,18 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import type { ClientListItem } from "@/data/mock-clients";
 import { Theme } from "@/constants/theme";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
-import type { ClientListItem } from "@/data/mock-clients";
+import {
+  buildOutstandingClientRow,
+  buildPaidClientRow,
+  buildPastClientRow,
+  formatCurrency,
+} from "@/lib/dashboard-clients";
 import { useAuth } from "@/providers/auth-provider";
 import {
   fetchDashboardSummary,
-  type DashboardClientSummary,
-  type DashboardPaidClient,
   type DashboardSummary,
 } from "@/services/dashboard";
 
@@ -121,6 +125,11 @@ export default function DashboardScreen() {
       buildOutstandingClientRow(entry)
     );
   }, [summary]);
+  const limitedUnpaidClients = useMemo(
+    () => unpaidClients.slice(0, 5),
+    [unpaidClients]
+  );
+  const unpaidCount = unpaidClients.length;
 
   const paidClients = useMemo<ClientListItem[]>(() => {
     if (!summary) return [];
@@ -128,17 +137,47 @@ export default function DashboardScreen() {
       buildPaidClientRow(entry)
     );
   }, [summary]);
+  const limitedPaidClients = useMemo(
+    () => paidClients.slice(0, 5),
+    [paidClients]
+  );
+  const paidCount = paidClients.length;
 
   const pastClientRows = useMemo<ClientListItem[]>(() => {
     if (!summary) return [];
     return summary.past_clients.map((entry) => buildPastClientRow(entry));
   }, [summary]);
+  const limitedPastClients = useMemo(
+    () => pastClientRows.slice(0, 5),
+    [pastClientRows]
+  );
+  const pastClientsCount = pastClientRows.length;
+  const showPastClientsSeeAll = pastClientsCount > 5;
 
-  const visibleClients = filter === "Not Paid" ? unpaidClients : paidClients;
+  const showingNotPaid = filter === "Not Paid";
+  const visibleClients = showingNotPaid
+    ? limitedUnpaidClients
+    : limitedPaidClients;
+  const visibleTotalCount = showingNotPaid ? unpaidCount : paidCount;
+  const showVisibleSeeAll = showingNotPaid
+    ? unpaidCount > 5
+    : paidCount > 5;
 
   const handleRefresh = useCallback(async () => {
     await loadSummary({ isRefreshing: true });
   }, [loadSummary]);
+
+  const handleSeeAllUnpaid = useCallback(() => {
+    router.push("/clients/not-paid");
+  }, [router]);
+
+  const handleSeeAllPaid = useCallback(() => {
+    router.push("/clients/paid");
+  }, [router]);
+
+  const handleSeeAllPastClients = useCallback(() => {
+    router.push("/past-clients");
+  }, [router]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -193,12 +232,24 @@ export default function DashboardScreen() {
         <ClientList
           title={`${filter} clients`}
           clients={visibleClients}
+          totalCount={visibleTotalCount}
+          actionLabel={showVisibleSeeAll ? "See all" : undefined}
+          onAction={
+            showVisibleSeeAll
+              ? showingNotPaid
+                ? handleSeeAllUnpaid
+                : handleSeeAllPaid
+              : undefined
+          }
           loading={loading && !refreshing && !summary}
           onPress={(id) => router.push(`/client/${id}`)}
         />
         <ClientList
           title="Past clients"
-          clients={pastClientRows}
+          clients={limitedPastClients}
+          totalCount={pastClientsCount}
+          actionLabel={showPastClientsSeeAll ? "See all" : undefined}
+          onAction={showPastClientsSeeAll ? handleSeeAllPastClients : undefined}
           muted
           loading={loading && !refreshing && !summary}
           onPress={(id) => router.push(`/client/${id}`)}
@@ -213,25 +264,44 @@ const typeLabels = {
   business: "Business",
 } as const;
 
-function ClientList({
+export function ClientList({
   title,
   clients: list,
   muted,
   onPress,
   loading,
+  actionLabel,
+  onAction,
+  totalCount,
 }: {
   title: string;
   clients: ClientListItem[];
   muted?: boolean;
   onPress?: (id: string) => void;
   loading?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
+  totalCount?: number;
 }) {
   const showEmpty = !loading && list.length === 0;
   return (
     <View style={[styles.listCard, muted && styles.listCardMuted]}>
       <View style={styles.listHeader}>
         <Text style={styles.listTitle}>{title}</Text>
-        <Text style={styles.listMeta}>{list.length} listed</Text>
+        <View style={styles.listHeaderRight}>
+          <Text style={styles.listMeta}>
+            {typeof totalCount === "number" ? totalCount : list.length} listed
+          </Text>
+          {actionLabel ? (
+            <Pressable
+              onPress={onAction}
+              hitSlop={8}
+              style={styles.listActionButton}
+            >
+              <Text style={styles.listActionLabel}>{actionLabel}</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
       {loading ? (
         <View style={styles.loadingState}>
@@ -240,133 +310,65 @@ function ClientList({
       ) : showEmpty ? (
         <Text style={styles.emptyText}>No clients to show right now.</Text>
       ) : (
-        list.map((client) => (
-          <Pressable
-            key={client.id}
-            style={styles.clientRow}
-            onPress={() => onPress?.(client.id)}
-          >
-            <View style={styles.clientText}>
-              <View style={styles.clientNameRow}>
-                <Text style={styles.clientName}>{client.name}</Text>
-                <View style={styles.clientTypeBadge}>
-                  <Text style={styles.clientTypeLabel}>
-                    {typeLabels[client.client_type]}
+        list.map((client) => {
+          const tone =
+            client.status === "Paid"
+              ? "paid"
+              : client.status === "Partially Paid"
+              ? "partial"
+              : "due";
+          const badgeStyle =
+            tone === "paid"
+              ? styles.badgePaid
+              : tone === "partial"
+              ? styles.badgePartial
+              : styles.badgeDue;
+          const labelStyle =
+            tone === "paid"
+              ? styles.badgeLabelPaid
+              : tone === "partial"
+              ? styles.badgeLabelPartial
+              : styles.badgeLabelDue;
+          const iconName =
+            tone === "paid"
+              ? "check-circle"
+              : tone === "partial"
+              ? "pie-chart"
+              : "alert-circle";
+          const iconColor =
+            tone === "paid" ? Theme.palette.success : Theme.palette.slate;
+          return (
+            <Pressable
+              key={client.id}
+              style={styles.clientRow}
+              onPress={() => onPress?.(client.id)}
+            >
+              <View style={styles.clientText}>
+                <View style={styles.clientNameRow}>
+                  <Text style={styles.clientName}>{client.name}</Text>
+                  <View style={styles.clientTypeBadge}>
+                    <Text style={styles.clientTypeLabel}>
+                      {typeLabels[client.client_type]}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.clientDetail}>{client.detail}</Text>
+              </View>
+              <View style={styles.clientAmounts}>
+                <Text style={styles.clientAmount}>{client.amount}</Text>
+                <View style={[styles.badge, badgeStyle]}>
+                  <Feather name={iconName} size={14} color={iconColor} />
+                  <Text style={[styles.badgeLabel, labelStyle]}>
+                    {client.status}
                   </Text>
                 </View>
               </View>
-              <Text style={styles.clientDetail}>{client.detail}</Text>
-            </View>
-            <View style={styles.clientAmounts}>
-              <Text style={styles.clientAmount}>{client.amount}</Text>
-              <View
-                style={[
-                  styles.badge,
-                  client.status === "Paid" ? styles.badgePaid : styles.badgeDue,
-                ]}
-              >
-                <Feather
-                  name={
-                    client.status === "Paid" ? "check-circle" : "alert-circle"
-                  }
-                  size={14}
-                  color={
-                    client.status === "Paid"
-                      ? Theme.palette.success
-                      : Theme.palette.slate
-                  }
-                />
-                <Text
-                  style={[
-                    styles.badgeLabel,
-                    client.status === "Paid"
-                      ? styles.badgeLabelPaid
-                      : styles.badgeLabelDue,
-                  ]}
-                >
-                  {client.status}
-                </Text>
-              </View>
-            </View>
-          </Pressable>
-        ))
+            </Pressable>
+          );
+        })
       )}
     </View>
   );
-}
-
-function buildOutstandingClientRow(
-  entry: DashboardClientSummary
-): ClientListItem {
-  const { client, total_amount } = entry;
-  return {
-    id: client.id,
-    name: truncateName(client.name),
-    amount: formatCurrency(total_amount, "USD"),
-    status: "Not Paid",
-    detail: "Awaiting payment",
-    client_type: client.client_type,
-  };
-}
-
-function buildPastClientRow(entry: DashboardClientSummary): ClientListItem {
-  const { client, total_amount } = entry;
-  return {
-    id: client.id,
-    name: truncateName(client.name),
-    amount: formatCurrency(total_amount, "USD"),
-    status: "Paid",
-    detail: "No active reminders",
-    client_type: client.client_type,
-  };
-}
-
-function buildPaidClientRow(entry: DashboardPaidClient): ClientListItem {
-  const latestPaid = entry.invoices
-    .map((invoice) => invoice.paid_at)
-    .filter((date): date is string => Boolean(date))
-    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
-  const detail = `${entry.invoices.length} invoice${
-    entry.invoices.length === 1 ? "" : "s"
-  } · ${
-    latestPaid ? `Paid ${formatDateShort(latestPaid)}` : "Settled this week"
-  }`;
-  const currency = entry.invoices[0]?.currency ?? "USD";
-  return {
-    id: entry.client.id,
-    name: truncateName(entry.client.name),
-    amount: formatCurrency(entry.total_paid, currency),
-    status: "Paid",
-    detail,
-    client_type: entry.client.client_type,
-  };
-}
-
-function truncateName(name: string) {
-  if (name.length <= 14) return name;
-  return `${name.slice(0, 11)}…`;
-}
-
-function formatCurrency(value: number, currency = "USD") {
-  const amount = Number(value);
-  if (Number.isNaN(amount)) {
-    return "—";
-  }
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
-
-function formatDateShort(iso?: string | null) {
-  if (!iso) return "";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 const styles = StyleSheet.create({
@@ -411,10 +413,12 @@ const styles = StyleSheet.create({
   },
   summaryRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: Theme.spacing.md,
   },
   summaryCard: {
     flex: 1,
+    minWidth: 220,
     borderRadius: Theme.radii.lg,
     borderWidth: 1,
     borderColor: Theme.palette.border,
@@ -449,16 +453,30 @@ const styles = StyleSheet.create({
   listHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "baseline",
+    alignItems: "center",
   },
   listTitle: {
     fontSize: 18,
     fontWeight: "500",
     color: Theme.palette.ink,
   },
+  listHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+  },
   listMeta: {
     fontSize: 13,
     color: Theme.palette.slateSoft,
+  },
+  listActionButton: {
+    paddingVertical: Theme.spacing.xs,
+    paddingHorizontal: Theme.spacing.sm,
+  },
+  listActionLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: Theme.palette.slate,
   },
   loadingState: {
     alignItems: "center",
@@ -530,6 +548,10 @@ const styles = StyleSheet.create({
     borderColor: Theme.palette.success,
     backgroundColor: "rgba(47, 110, 79, 0.08)",
   },
+  badgePartial: {
+    borderColor: Theme.palette.slate,
+    backgroundColor: "rgba(77, 94, 114, 0.1)",
+  },
   badgeDue: {
     borderColor: Theme.palette.border,
     backgroundColor: Theme.palette.surface,
@@ -540,6 +562,9 @@ const styles = StyleSheet.create({
   },
   badgeLabelPaid: {
     color: Theme.palette.success,
+  },
+  badgeLabelPartial: {
+    color: Theme.palette.slate,
   },
   badgeLabelDue: {
     color: Theme.palette.slate,

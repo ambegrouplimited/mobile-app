@@ -9,7 +9,9 @@ import { Theme } from "@/constants/theme";
 import { ReminderSummaryDetails } from "@/components/reminder-summary";
 import { ReminderSummaryData } from "@/types/reminders";
 import { useAuth } from "@/providers/auth-provider";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
 import { createInvoice } from "@/services/invoices";
+import { deleteReminderDraft } from "@/services/reminder-drafts";
 import type { DeliveryChannel, InvoiceCreatePayload, ReminderSchedulePayload } from "@/types/invoices";
 
 export default function SummaryScreen() {
@@ -17,6 +19,12 @@ export default function SummaryScreen() {
   const { session } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
   const params = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const draftId = params.draftId ?? null;
+  const draftParams = useMemo(() => {
+    const next = { ...params };
+    delete next.draftId;
+    return next;
+  }, [params]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -50,13 +58,52 @@ export default function SummaryScreen() {
     },
   };
 
+  useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    params: draftParams,
+    metadata: {
+      client_name: params.client || "New reminder",
+      amount_display: params.amount || null,
+      status: "Ready to send",
+      next_action: "Finish scheduling when you're ready.",
+    },
+    lastStep: "summary",
+    lastPath: "/new-reminder/summary",
+    enabled: Boolean(session?.accessToken && draftId),
+  });
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
+  };
+  const handleBack = () => {
+    if (draftId) {
+      router.push({
+        pathname: "/new-reminder/schedule",
+        params: {
+          ...draftParams,
+          ...(draftId ? { draftId } : {}),
+        },
+      });
+      return;
+    }
+    router.back();
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable style={styles.backLink} onPress={() => router.back()} hitSlop={8}>
-          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
-          <Text style={styles.backLabel}>Edit schedule</Text>
-        </Pressable>
+        <View style={styles.navRow}>
+          <Pressable style={styles.backLink} onPress={handleBack} hitSlop={8}>
+            <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Edit schedule</Text>
+          </Pressable>
+          {draftId ? (
+            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+              <Feather name="home" size={18} color={Theme.palette.slate} />
+              <Text style={styles.remindersLabel}>Reminders</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>Reminder summary</Text>
@@ -83,6 +130,7 @@ export default function SummaryScreen() {
               scheduleMode,
               scheduleInfo,
               sessionToken: session?.accessToken ?? null,
+              draftId,
               setError: setSubmitError,
               setSubmitting,
               router,
@@ -101,6 +149,7 @@ async function handleSubmit({
   scheduleMode,
   scheduleInfo,
   sessionToken,
+  draftId,
   setError,
   setSubmitting,
   router,
@@ -109,6 +158,7 @@ async function handleSubmit({
   scheduleMode: ReminderSummaryData["schedule"]["mode"];
   scheduleInfo: unknown;
   sessionToken: string | null;
+  draftId?: string | null;
   setError: (value: string | null) => void;
   setSubmitting: (value: boolean) => void;
   router: ReturnType<typeof useRouter>;
@@ -155,6 +205,13 @@ async function handleSubmit({
   setSubmitting(true);
   try {
     await createInvoice(payload, sessionToken);
+    if (draftId && sessionToken) {
+      try {
+        await deleteReminderDraft(draftId, sessionToken);
+      } catch {
+        // Ignore draft deletion failures—invoice creation already succeeded.
+      }
+    }
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.dismissAll();
     router.replace("/(tabs)");
@@ -197,12 +254,26 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
   },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   backLink: {
     flexDirection: "row",
     alignItems: "center",
     gap: Theme.spacing.xs,
   },
   backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  remindersLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  remindersLabel: {
     fontSize: 14,
     color: Theme.palette.slate,
   },

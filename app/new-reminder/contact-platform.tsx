@@ -12,21 +12,78 @@ import {
   CONTACT_PLATFORM_OPTIONS,
   ContactPlatformId,
 } from "@/constants/contact-platforms";
+import { useAuth } from "@/providers/auth-provider";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
 
 export default function ContactPlatformScreen() {
   const router = useRouter();
+  const { session } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
   const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
   const initialPlatform = (persistedParams.platform as ContactPlatformId) ?? "gmail";
   const [selected, setSelected] = useState<ContactPlatformId>(initialPlatform);
+  const draftId = persistedParams.draftId ?? null;
+  const baseParams = useMemo(() => {
+    const next = { ...persistedParams };
+    delete next.draftId;
+    return next;
+  }, [persistedParams]);
+  const paramsForDraft = useMemo(() => {
+    return {
+      ...baseParams,
+      platform: selected,
+    };
+  }, [baseParams, selected]);
+  const metadata = useMemo(
+    () => ({
+      client_name: baseParams.client || "New reminder",
+      amount_display: baseParams.amount || null,
+      status: "Delivery channel",
+      next_action: "Confirm delivery preferences.",
+    }),
+    [baseParams.amount, baseParams.client],
+  );
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
+  };
+  const handleBack = () => {
+    if (draftId) {
+      router.push({
+        pathname: "/(tabs)/new-reminder",
+        params: {
+          ...baseParams,
+          ...(draftId ? { draftId } : {}),
+        },
+      });
+      return;
+    }
+    router.back();
+  };
+  const { ensureDraftSaved } = useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    params: paramsForDraft,
+    metadata,
+    lastStep: "contact-platform",
+    lastPath: "/new-reminder/contact-platform",
+    enabled: Boolean(session?.accessToken && draftId),
+  });
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable style={styles.backLink} onPress={() => router.back()}>
-          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
-          <Text style={styles.backLabel}>Back to reminder draft</Text>
-        </Pressable>
+        <View style={styles.navRow}>
+          <Pressable style={styles.backLink} onPress={handleBack}>
+            <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Back to reminder draft</Text>
+          </Pressable>
+          {draftId ? (
+            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+              <Feather name="home" size={18} color={Theme.palette.slate} />
+              <Text style={styles.remindersLabel}>Reminders</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>Pick a contact platform</Text>
@@ -72,9 +129,15 @@ export default function ContactPlatformScreen() {
           style={styles.primaryButton}
           onPress={async () => {
             await Haptics.selectionAsync();
+            const savedDraftId = await ensureDraftSaved();
+            const nextParams = {
+              ...baseParams,
+              platform: selected,
+              ...(savedDraftId ? { draftId: savedDraftId } : {}),
+            };
             router.push({
               pathname: "/new-reminder/send-options",
-              params: { ...persistedParams, platform: selected },
+              params: nextParams,
             });
           }}
         >
@@ -112,12 +175,26 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
   },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   backLink: {
     flexDirection: "row",
     alignItems: "center",
     gap: Theme.spacing.xs,
   },
   backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  remindersLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  remindersLabel: {
     fontSize: 14,
     color: Theme.palette.slate,
   },

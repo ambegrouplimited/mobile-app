@@ -17,23 +17,104 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { getContactPlatformInfo } from "@/constants/contact-platforms";
 import { Theme } from "@/constants/theme";
 import { ReminderMessage, reminderDetails } from "@/data/mock-reminders";
+import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { useAuth } from "@/providers/auth-provider";
+import { fetchClientMessages } from "@/services/messages";
+import type { ClientMessage } from "@/types/messages";
+
+const CLIENT_MESSAGES_CACHE_KEY = (clientId: string) =>
+  `cache.messages.client.${clientId}`;
+const MESSAGES_LIMIT = 20;
 
 export default function ReminderMessagesScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { session } = useAuth();
+  const params = useLocalSearchParams<{
+    id: string;
+    clientId?: string | string[];
+    client?: string;
+    amount?: string;
+    status?: string;
+    platform?: string;
+  }>();
+  const id = getParam(params.id);
   const reminder = id ? reminderDetails[id] : undefined;
+  const clientId = getParam(params.clientId);
+  const paramClient = getParam(params.client);
+  const paramAmount = getParam(params.amount);
+  const paramStatus = getParam(params.status);
+  const paramPlatform = getParam(params.platform);
   const scrollRef = useRef<ScrollView>(null);
+  const headerClient = paramClient ?? reminder?.client ?? "Client";
+  const headerAmount = paramAmount ?? reminder?.amount;
+  const headerStatus = paramStatus ?? reminder?.status;
+  const platformSource = paramPlatform ?? reminder?.platform;
 
   const platformMeta = useMemo(() => {
-    return getContactPlatformInfo(reminder?.platform);
-  }, [reminder?.platform]);
+    return getContactPlatformInfo(platformSource);
+  }, [platformSource]);
 
   const [composerText, setComposerText] = useState("");
   const [messages, setMessages] = useState<ReminderMessage[]>(reminder?.messages ?? []);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setMessages(reminder?.messages ?? []);
   }, [reminder]);
+
+  useEffect(() => {
+    if (!clientId) return;
+    let cancelled = false;
+    const hydrate = async () => {
+      const cached = await getCachedValue<ReminderMessage[]>(
+        CLIENT_MESSAGES_CACHE_KEY(clientId)
+      );
+      if (!cancelled && cached?.length) {
+        setMessages(cached);
+      }
+    };
+    hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+
+  useEffect(() => {
+    if (!clientId || !session?.accessToken) return;
+    let cancelled = false;
+    const loadMessages = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const entries = await fetchClientMessages(clientId, session.accessToken, {
+          limit: MESSAGES_LIMIT,
+        });
+        if (cancelled) return;
+        const mapped = entries.map((entry, index) =>
+          buildChatMessage(entry, index)
+        );
+        setMessages(mapped);
+        await setCachedValue(CLIENT_MESSAGES_CACHE_KEY(clientId), mapped);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load recent messages right now."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    loadMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, session?.accessToken]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -69,11 +150,13 @@ export default function ReminderMessagesScreen() {
             <Text style={styles.backLabel}>Back to reminder</Text>
           </Pressable>
 
-          {reminder ? (
+          {reminder || paramClient ? (
             <>
               <View style={styles.header}>
-                <Text style={styles.title}>{reminder.client}</Text>
-                <Text style={styles.subtitle}>{reminder.amount} • {reminder.status}</Text>
+                <Text style={styles.title}>{headerClient}</Text>
+                <Text style={styles.subtitle}>
+                  {[headerAmount, headerStatus].filter(Boolean).join(" • ")}
+                </Text>
                 {platformMeta ? (
                   <View style={styles.platformBadge}>
                     {platformMeta.assetUri ? (
@@ -90,33 +173,44 @@ export default function ReminderMessagesScreen() {
                 ) : null}
               </View>
 
+              {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
               <ScrollView ref={scrollRef} contentContainerStyle={styles.chatArea}>
-                {messages.map((message) => (
-                  <View
-                    key={message.id}
-                    style={[
-                      styles.messageRow,
-                      message.sender === "user" ? styles.alignEnd : styles.alignStart,
-                    ]}
-                  >
+                {messages.length === 0 ? (
+                  <View style={styles.emptyChat}>
+                    <Feather name="message-circle" size={20} color={Theme.palette.slate} />
+                    <Text style={styles.placeholderDetail}>
+                      {loading ? "Loading conversation…" : "No conversation yet."}
+                    </Text>
+                  </View>
+                ) : (
+                  messages.map((message) => (
                     <View
+                      key={message.id}
                       style={[
-                        styles.messageBubble,
-                        message.sender === "user" ? styles.userBubble : styles.clientBubble,
+                        styles.messageRow,
+                        message.sender === "user" ? styles.alignEnd : styles.alignStart,
                       ]}
                     >
-                      <Text
+                      <View
                         style={[
-                          styles.messageText,
-                          message.sender === "user" ? styles.userText : styles.clientText,
+                          styles.messageBubble,
+                          message.sender === "user" ? styles.userBubble : styles.clientBubble,
                         ]}
                       >
-                        {message.text}
-                      </Text>
+                        <Text
+                          style={[
+                            styles.messageText,
+                            message.sender === "user" ? styles.userText : styles.clientText,
+                          ]}
+                        >
+                          {message.text}
+                        </Text>
+                      </View>
+                      <Text style={styles.timestamp}>{formatTimestamp(message.timestamp)}</Text>
                     </View>
-                    <Text style={styles.timestamp}>{formatTimestamp(message.timestamp)}</Text>
-                  </View>
-                ))}
+                  ))
+                )}
               </ScrollView>
 
               <View style={styles.composer}>
@@ -264,6 +358,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 11,
     color: Theme.palette.slateSoft,
+    alignSelf: "flex-end",
+  },
+  emptyChat: {
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    paddingVertical: Theme.spacing.lg,
   },
   composer: {
     flexDirection: "row",
@@ -323,6 +423,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Theme.palette.slate,
   },
+  errorText: {
+    fontSize: 13,
+    color: Theme.palette.accent,
+  },
   primaryButton: {
     marginTop: Theme.spacing.sm,
     backgroundColor: Theme.palette.ink,
@@ -342,5 +446,37 @@ function formatTimestamp(value: string) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function buildChatMessage(entry: ClientMessage, index: number): ReminderMessage {
+  const sender: ReminderMessage["sender"] =
+    entry.direction === "outgoing" ? "user" : "client";
+  const text = formatMessageText(entry);
+  const id =
+    (entry.metadata && (entry.metadata.message_id as string)) ||
+    (entry.metadata && (entry.metadata.id as string)) ||
+    `${entry.channel}-${entry.sent_at}-${index}`;
+  return {
+    id,
+    sender,
+    text,
+    timestamp: entry.sent_at ?? new Date().toISOString(),
+  };
+}
+
+function formatMessageText(entry: ClientMessage) {
+  return entry.preview ?? entry.body ?? "(No preview available)";
+}
+
+function getParam(value?: string | string[]) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
 }

@@ -1,30 +1,127 @@
 import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
 import { reminderDetails } from "@/data/mock-reminders";
+import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { useAuth } from "@/providers/auth-provider";
+import { fetchReminderHistory } from "@/services/reminders";
+import type { Reminder } from "@/types/invoices";
 
 const formatDeliveryTimestamp = (iso: string) => {
   const date = new Date(iso);
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const month = monthNames[date.getMonth()] ?? "";
+  if (Number.isNaN(date.getTime())) return "Time unknown";
+  const month = date.toLocaleString(undefined, { month: "short" });
   const day = date.getDate();
-  let hours = date.getHours();
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  const suffix = hours >= 12 ? "PM" : "AM";
-  hours = hours % 12 || 12;
-  return `${month} ${day} • ${hours}:${minutes} ${suffix}`;
+  const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `${month} ${day} • ${time}`;
 };
+
+const HISTORY_CACHE_KEY = (invoiceId: string) => `cache.reminder.${invoiceId}.history`;
+const HISTORY_LIMIT = 5;
 
 export default function ReminderHistoryScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { session } = useAuth();
+  const params = useLocalSearchParams<{ id: string; invoiceId?: string | string[] }>();
+  const id = getParam(params.id);
+  const invoiceId = getParam(params.invoiceId);
   const reminder = id ? reminderDetails[id] : undefined;
-  const deliveries = reminder?.deliveries
-    ? [...reminder.deliveries].sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())
-    : [];
+  const fallbackDeliveries =
+    reminder?.deliveries?.map((delivery) => ({
+      id: delivery.id,
+      invoice_id: reminder.id,
+      client_id: "",
+      user_id: "",
+      scheduled_for: delivery.sentAt,
+      tone: "gentle",
+      status: "sent",
+      delivery_channel: delivery.channel as Reminder["delivery_channel"],
+      sent_at: delivery.sentAt,
+      last_error: null,
+    })) ?? [];
+  const [history, setHistory] = useState<Reminder[]>(
+    fallbackDeliveries.sort(
+      (a, b) =>
+        new Date(b.sent_at ?? b.scheduled_for).getTime() -
+        new Date(a.sent_at ?? a.scheduled_for).getTime()
+    )
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!invoiceId) return;
+    let cancelled = false;
+    const hydrate = async () => {
+      const cached = await getCachedValue<Reminder[]>(HISTORY_CACHE_KEY(invoiceId));
+      if (!cancelled && cached) {
+        setHistory(cached);
+      }
+    };
+    hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceId]);
+
+  useEffect(() => {
+    if (!invoiceId || !session?.accessToken) return;
+    let cancelled = false;
+    const loadHistory = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetchReminderHistory(session.accessToken, invoiceId, {
+          limit: HISTORY_LIMIT,
+        });
+        if (cancelled) return;
+        const sorted = response.sort(
+          (a, b) =>
+            new Date(b.sent_at ?? b.scheduled_for).getTime() -
+            new Date(a.sent_at ?? a.scheduled_for).getTime()
+        );
+        setHistory(sorted);
+        await setCachedValue(HISTORY_CACHE_KEY(invoiceId), sorted);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Unable to load past deliveries."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceId, session?.accessToken]);
+
+  const deliveryCards = useMemo(() => {
+    return history.map((item) => {
+      const title = `${capitalize(item.tone ?? "gentle")} reminder`;
+      const statusLabel = capitalize(item.status ?? "sent");
+      const sentLabel = formatDeliveryTimestamp(item.sent_at ?? item.scheduled_for ?? "");
+      const channelLabel = formatChannelLabel(item.delivery_channel ?? "");
+      const summary = `Delivered ${
+        item.delivery_channel ? `via ${channelLabel}` : "to the client"
+      } at ${sentLabel}.`;
+      return {
+        id: item.id,
+        subject: title,
+        status: statusLabel,
+        meta: `${sentLabel} · ${channelLabel}`,
+        summary,
+      };
+    });
+  }, [history]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -34,20 +131,35 @@ export default function ReminderHistoryScreen() {
           <Text style={styles.backLabel}>Back to reminder</Text>
         </Pressable>
 
-        {reminder ? (
+        {reminder || invoiceId ? (
           <>
             <View style={styles.headerCard}>
-              <Text style={styles.sectionEyebrow}>Past reminders</Text>
-              <Text style={styles.clientName}>{reminder.client}</Text>
-              <Text style={styles.amount}>{reminder.amount}</Text>
-              <Text style={styles.meta}>{reminder.scheduleMode}</Text>
+              <Text style={styles.sectionEyebrow}>Past deliveries</Text>
+              <Text style={styles.clientName}>{reminder?.client ?? "Reminder"}</Text>
+              {reminder?.amount ? (
+                <Text style={styles.amount}>{reminder.amount}</Text>
+              ) : null}
+              {reminder?.scheduleMode ? (
+                <Text style={styles.meta}>{reminder.scheduleMode}</Text>
+              ) : null}
             </View>
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Deliveries</Text>
-              {deliveries.length > 0 ? (
+              {loading && !deliveryCards.length ? (
+                <View style={styles.placeholderCard}>
+                  <Feather name="loader" size={20} color={Theme.palette.slate} />
+                  <Text style={styles.placeholderTitle}>Loading past deliveries…</Text>
+                </View>
+              ) : error ? (
+                <View style={styles.placeholderCard}>
+                  <Feather name="alert-triangle" size={20} color={Theme.palette.accent} />
+                  <Text style={styles.placeholderTitle}>Unable to load history</Text>
+                  <Text style={styles.placeholderDetail}>{error}</Text>
+                </View>
+              ) : deliveryCards.length > 0 ? (
                 <View style={styles.deliveryList}>
-                  {deliveries.map((delivery) => (
+                  {deliveryCards.map((delivery) => (
                     <View key={delivery.id} style={styles.deliveryCard}>
                       <View style={styles.deliveryHeader}>
                         <Text style={styles.deliverySubject}>{delivery.subject}</Text>
@@ -55,9 +167,7 @@ export default function ReminderHistoryScreen() {
                       </View>
                       <View style={styles.deliveryMetaRow}>
                         <Feather name="clock" size={14} color={Theme.palette.slate} />
-                        <Text style={styles.deliveryMeta}>
-                          {formatDeliveryTimestamp(delivery.sentAt)} · {delivery.channel}
-                        </Text>
+                        <Text style={styles.deliveryMeta}>{delivery.meta}</Text>
                       </View>
                       <Text style={styles.deliverySummary}>{delivery.summary}</Text>
                     </View>
@@ -67,7 +177,9 @@ export default function ReminderHistoryScreen() {
                 <View style={styles.placeholderCard}>
                   <Feather name="inbox" size={20} color={Theme.palette.slate} />
                   <Text style={styles.placeholderTitle}>No deliveries yet</Text>
-                  <Text style={styles.placeholderDetail}>Reminder sends will appear here after they go out.</Text>
+                  <Text style={styles.placeholderDetail}>
+                    Reminder sends will appear here after they go out.
+                  </Text>
                 </View>
               )}
             </View>
@@ -213,3 +325,34 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
+
+function getParam(value?: string | string[]) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function formatChannelLabel(channel: string) {
+  switch (channel) {
+    case "gmail":
+    case "email":
+      return "Gmail";
+    case "email_outlook":
+    case "outlook":
+      return "Outlook";
+    case "mailgun":
+      return "Mailgun";
+    case "whatsapp":
+      return "WhatsApp";
+    case "telegram":
+      return "Telegram";
+    case "slack":
+      return "Slack";
+    default:
+      return channel || "Channel unknown";
+  }
+}
+
+function capitalize(value?: string | null) {
+  if (!value) return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}

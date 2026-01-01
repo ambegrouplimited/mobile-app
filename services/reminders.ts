@@ -1,5 +1,6 @@
 import { apiFetch, toQueryString } from "@/lib/api-client";
 import type { Reminder, ReminderStatus } from "@/types/invoices";
+import type { UpcomingReminder } from "@/types/reminders";
 
 export function fetchReminders(
   token: string,
@@ -17,4 +18,28 @@ export function sendReminder(id: string, token: string) {
     method: "POST",
     token,
   });
+}
+
+export function fetchUpcomingReminders(
+  token: string,
+  params?: { limit?: number }
+) {
+  const query = params?.limit
+    ? toQueryString({ limit: String(params.limit) })
+    : "";
+  return apiFetch<UpcomingReminder[]>(`/api/reminders/upcoming${query}`, {
+    token,
+  });
+}
+
+export function fetchReminderHistory(
+  token: string,
+  invoiceId: string,
+  params?: { limit?: number }
+) {
+  const query = toQueryString({
+    invoice_id: invoiceId,
+    limit: params?.limit ? String(params.limit) : undefined,
+  });
+  return apiFetch<Reminder[]>(`/api/reminders/history${query}`, { token });
 }

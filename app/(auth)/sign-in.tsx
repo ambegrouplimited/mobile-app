@@ -24,6 +24,9 @@ export default function SignInScreen() {
     cancelTwoFactorChallenge,
     twoFactorError,
     twoFactorVerifying,
+    twoFactorRecovery,
+    requestTwoFactorRecovery,
+    submitTwoFactorRecovery,
   } = useAuth();
   const [touched, setTouched] = useState(false);
 
@@ -93,6 +96,9 @@ export default function SignInScreen() {
           onCancel={cancelTwoFactorChallenge}
           loading={twoFactorVerifying}
           error={twoFactorError}
+          onRequestRecovery={requestTwoFactorRecovery}
+          onSubmitRecovery={submitTwoFactorRecovery}
+          recovery={twoFactorRecovery}
         />
       </View>
     </SafeAreaView>

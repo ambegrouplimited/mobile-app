@@ -26,6 +26,13 @@ export type ReminderScheduleCadenceSummary = {
   };
 };
 
+import type {
+  DeliveryChannel,
+  ReminderSchedulePayload,
+  ReminderStatus,
+  ReminderTone,
+} from "./invoices";
+
 export type ReminderScheduleSummary =
   | ReminderScheduleManualSummary
   | ReminderScheduleWeeklySummary
@@ -57,4 +64,22 @@ export type ReminderSummaryData = {
   };
   payment: ReminderSummaryPayment;
   schedule: ReminderScheduleSummary;
+};
+
+export type UpcomingReminder = {
+  id: string;
+  invoice_id: string;
+  client_id: string;
+  user_id: string;
+  scheduled_for: string;
+  tone: ReminderTone;
+  status: ReminderStatus;
+  delivery_channel: DeliveryChannel | null;
+  sent_at: string | null;
+  last_error: string | null;
+  client_name: string;
+  invoice_amount: number;
+  invoice_currency: string;
+  invoice_send_via: DeliveryChannel;
+  invoice_schedule: ReminderSchedulePayload;
 };

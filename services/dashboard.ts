@@ -15,9 +15,12 @@ export type DashboardPaidInvoice = {
   paid_at: string;
 };
 
+export type PaymentStatus = "paid" | "not_paid" | "partially_paid";
+
 export type DashboardClientSummary = {
   client: Client;
   total_amount: number;
+  payment_status?: PaymentStatus;
 };
 
 export type DashboardPaidClient = {

@@ -7,23 +7,69 @@ import { Theme } from "@/constants/theme";
 import { reminderDetails } from "@/data/mock-reminders";
 
 const actions = [
-  { icon: "refresh-cw", title: "Past reminders", detail: "History & delivery status", href: "/reminders/[id]/history" },
+  { icon: "refresh-cw", title: "Past deliveries", detail: "History & delivery status", href: "/reminders/[id]/history" },
   { icon: "message-circle", title: "Messages", detail: "Email threads & replies", href: "/reminders/[id]/messages" },
   { icon: "file-text", title: "Reminder summary", detail: "Tone, schedule, payment", href: "/reminders/[id]/summary" },
 ] as const;
 
+function getParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
 export default function ReminderDetailScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    client?: string;
+    amount?: string;
+    status?: string;
+    nextAction?: string;
+    schedule?: string;
+    invoiceId?: string | string[];
+    clientId?: string | string[];
+    platform?: string | string[];
+  }>();
+  const id = getParam(params.id);
   const reminder = id ? reminderDetails[id] : undefined;
+  const paramClient = getParam(params.client);
+  const paramAmount = getParam(params.amount);
+  const paramStatus = getParam(params.status);
+  const paramNextAction = getParam(params.nextAction);
+  const paramSchedule = getParam(params.schedule);
+  const invoiceId = getParam(params.invoiceId);
+  const clientId = getParam(params.clientId);
+  const platform = getParam(params.platform);
+  const headerClient = paramClient ?? reminder?.client;
+  const headerAmount = paramAmount ?? reminder?.amount;
+  const headerStatus = paramStatus ?? reminder?.status;
+  const headerNextAction = paramNextAction ?? reminder?.nextAction;
+  const headerSchedule = paramSchedule ?? reminder?.scheduleMode;
+  const hasPrefill =
+    Boolean(paramClient) ||
+    Boolean(paramAmount) ||
+    Boolean(paramStatus) ||
+    Boolean(paramNextAction) ||
+    Boolean(paramSchedule);
 
   const handleActionPress = (href?: string) => {
     if (!href || !id) {
       return;
     }
+    const nextParams: Record<string, string> = { id };
+    if (invoiceId) nextParams.invoiceId = invoiceId;
+    if (clientId) nextParams.clientId = clientId;
+    if (platform) nextParams.platform = platform;
+    if (headerClient) nextParams.client = headerClient;
+    if (headerAmount) nextParams.amount = headerAmount;
+    if (headerStatus) nextParams.status = headerStatus;
+    if (headerNextAction) nextParams.nextAction = headerNextAction;
+    if (headerSchedule) nextParams.schedule = headerSchedule;
     router.push({
       pathname: href,
-      params: { id },
+      params: nextParams,
     });
   };
 
@@ -35,14 +81,24 @@ export default function ReminderDetailScreen() {
           <Text style={styles.backLabel}>Back to reminders</Text>
         </Pressable>
 
-        {reminder ? (
+        {reminder || hasPrefill ? (
           <>
             <View style={styles.headerCard}>
-              <Text style={styles.clientName}>{reminder.client}</Text>
-              <Text style={styles.amount}>{reminder.amount}</Text>
-              <Text style={styles.status}>{reminder.status}</Text>
-              <Text style={styles.meta}>{reminder.nextAction}</Text>
-              <Text style={styles.meta}>{reminder.scheduleMode}</Text>
+              <Text style={styles.clientName}>
+                {headerClient ?? "Unnamed client"}
+              </Text>
+              {headerAmount ? (
+                <Text style={styles.amount}>{headerAmount}</Text>
+              ) : null}
+              {headerStatus ? (
+                <Text style={styles.status}>{headerStatus}</Text>
+              ) : null}
+              {headerNextAction ? (
+                <Text style={styles.meta}>{headerNextAction}</Text>
+              ) : null}
+              {headerSchedule ? (
+                <Text style={styles.meta}>{headerSchedule}</Text>
+              ) : null}
             </View>
 
             <View style={styles.section}>

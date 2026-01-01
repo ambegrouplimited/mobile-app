@@ -1,4 +1,4 @@
-export type ClientStatus = "Paid" | "Not Paid";
+export type ClientStatus = "Paid" | "Not Paid" | "Partially Paid";
 
 export type ClientType = "business" | "individual";
 

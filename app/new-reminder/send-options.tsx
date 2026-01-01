@@ -21,6 +21,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
 import { useAuth } from "@/providers/auth-provider";
 import { createClient } from "@/services/clients";
 import {
@@ -170,6 +171,99 @@ export default function SendOptionsScreen() {
     meta: null,
   }));
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
+  const draftId = persistedParams.draftId ?? null;
+  const baseParams = useMemo(() => {
+    const next = { ...persistedParams };
+    delete next.draftId;
+    return next;
+  }, [persistedParams]);
+  const hasContactDetails = useMemo(() => {
+    if (platform === "gmail" || platform === "outlook") {
+      return Boolean(contactEmail.trim());
+    }
+    if (platform === "whatsapp") {
+      return Boolean(contactPhone.trim());
+    }
+    if (platform === "slack") {
+      return Boolean(slackTeamId && slackUserId);
+    }
+    if (platform === "telegram") {
+      return Boolean(telegramChatId);
+    }
+    return Boolean(contactEmail.trim());
+  }, [contactEmail, contactPhone, platform, slackTeamId, slackUserId, telegramChatId]);
+  const paramsForDraft = useMemo(() => {
+    const next: Record<string, string> = { ...baseParams };
+    next.platform = platform;
+    next.mode = selection;
+    if (contactLabel.trim()) {
+      next.contactLabel = contactLabel.trim();
+    }
+    if (contactEmail.trim()) {
+      next.contact = contactEmail.trim();
+    }
+    if (contactPhone.trim()) {
+      next.contactPhone = contactPhone.trim();
+    }
+    if (slackTeamId) {
+      next.slackTeamId = slackTeamId;
+    }
+    if (slackUserId) {
+      next.slackUserId = slackUserId;
+    }
+    if (telegramChatId) {
+      next.telegramChatId = telegramChatId;
+    }
+    if (telegramUsername) {
+      next.telegramUsername = telegramUsername;
+    }
+    return next;
+  }, [
+    baseParams,
+    contactEmail,
+    contactLabel,
+    contactPhone,
+    platform,
+    selection,
+    slackTeamId,
+    slackUserId,
+    telegramChatId,
+    telegramUsername,
+  ]);
+  const metadata = useMemo(
+    () => ({
+      client_name: baseParams.client || "New reminder",
+      amount_display: baseParams.amount || null,
+      status: hasContactDetails ? "Contact saved" : "Add contact details",
+      next_action: hasContactDetails ? "Attach a payment method." : "Fill in the contact details.",
+    }),
+    [baseParams.amount, baseParams.client, hasContactDetails],
+  );
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
+  };
+  const handleBack = () => {
+    if (draftId) {
+      router.push({
+        pathname: "/new-reminder/contact-platform",
+        params: {
+          ...baseParams,
+          ...(draftId ? { draftId } : {}),
+        },
+      });
+      return;
+    }
+    router.back();
+  };
+  const { ensureDraftSaved } = useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    params: paramsForDraft,
+    metadata,
+    lastStep: "send-options",
+    lastPath: "/new-reminder/send-options",
+    enabled: Boolean(session?.accessToken && draftId),
+  });
 
   const loadConnectionStatus = useCallback(async () => {
     if (!selectionRequiresConnection || !session?.accessToken) {
@@ -551,7 +645,7 @@ export default function SendOptionsScreen() {
     }
 
     if (persistedParams.clientId && persistedParams.contactMethodId) {
-      proceedToPayment({
+      await proceedToPayment({
         clientId: persistedParams.clientId,
         contactMethodId: persistedParams.contactMethodId,
         summaryValue: validation.summary,
@@ -569,7 +663,7 @@ export default function SendOptionsScreen() {
       const clientPayload = buildClientPayload(persistedParams, validation.contactPayload);
       const client = await createClient(clientPayload, session.accessToken);
       const resolvedMethod = resolveContactMethod(client.contact_methods, validation.contactPayload);
-      proceedToPayment({
+      await proceedToPayment({
         clientId: client.id,
         contactMethodId: resolvedMethod?.id ?? client.contact_methods[0]?.id ?? "",
         summaryValue: validation.summary,
@@ -581,7 +675,7 @@ export default function SendOptionsScreen() {
     }
   };
 
-  const proceedToPayment = ({
+  const proceedToPayment = async ({
     clientId,
     contactMethodId,
     summaryValue,
@@ -595,22 +689,25 @@ export default function SendOptionsScreen() {
       return;
     }
     setModalVisible(false);
+    const savedDraftId = await ensureDraftSaved();
+    const nextParams = {
+      ...baseParams,
+      platform,
+      mode: selection,
+      contact: summaryValue,
+      contactLabel: contactLabel.trim(),
+      clientId,
+      contactMethodId,
+      contactPhone,
+      slackTeamId,
+      slackUserId,
+      telegramChatId,
+      telegramUsername,
+      ...(savedDraftId ? { draftId: savedDraftId } : {}),
+    };
     router.push({
       pathname: "/new-reminder/payment-method",
-      params: {
-        ...persistedParams,
-        platform,
-        mode: selection,
-        contact: summaryValue,
-        contactLabel: contactLabel.trim(),
-        clientId,
-        contactMethodId,
-        contactPhone,
-        slackTeamId,
-        slackUserId,
-        telegramChatId,
-        telegramUsername,
-      },
+      params: nextParams,
     });
   };
 
@@ -868,10 +965,18 @@ export default function SendOptionsScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable style={styles.backLink} onPress={() => router.back()}>
-          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
-          <Text style={styles.backLabel}>Choose platform</Text>
-        </Pressable>
+        <View style={styles.navRow}>
+          <Pressable style={styles.backLink} onPress={handleBack}>
+            <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Choose platform</Text>
+          </Pressable>
+          {draftId ? (
+            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+              <Feather name="home" size={18} color={Theme.palette.slate} />
+              <Text style={styles.remindersLabel}>Reminders</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>How should we send it?</Text>
@@ -1210,12 +1315,26 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
   },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   backLink: {
     flexDirection: "row",
     alignItems: "center",
     gap: Theme.spacing.xs,
   },
   backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  remindersLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  remindersLabel: {
     fontSize: 14,
     color: Theme.palette.slate,
   },

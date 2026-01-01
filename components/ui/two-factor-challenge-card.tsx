@@ -18,6 +18,14 @@ type Props = {
   onCancel: () => void;
   loading?: boolean;
   error?: string | null;
+  onRequestRecovery?: () => Promise<void> | void;
+  onSubmitRecovery?: (code: string) => Promise<void> | void;
+  recovery?: {
+    requested: boolean;
+    sending: boolean;
+    verifying: boolean;
+    error?: string | null;
+  };
 };
 
 export function TwoFactorChallengeCard({
@@ -27,14 +35,25 @@ export function TwoFactorChallengeCard({
   onCancel,
   loading = false,
   error,
+  onRequestRecovery,
+  onSubmitRecovery,
+  recovery,
 }: Props) {
   const [code, setCode] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   useEffect(() => {
     if (!visible) {
       setCode("");
+      setRecoveryCode("");
     }
   }, [visible]);
+
+  useEffect(() => {
+    if (!recovery?.requested) {
+      setRecoveryCode("");
+    }
+  }, [recovery?.requested]);
 
   if (!visible) {
     return null;
@@ -45,6 +64,13 @@ export function TwoFactorChallengeCard({
       return;
     }
     onSubmit(code.trim());
+  };
+
+  const handleRecoverySubmit = () => {
+    if (!onSubmitRecovery || recoveryCode.trim().length < 6) {
+      return;
+    }
+    onSubmitRecovery(recoveryCode.trim());
   };
 
   return (
@@ -84,6 +110,61 @@ export function TwoFactorChallengeCard({
             <Text style={styles.submitText}>{loading ? "Verifying…" : "Verify"}</Text>
           </Pressable>
         </View>
+        {onRequestRecovery ? (
+          <View style={styles.recoverySection}>
+            {recovery?.requested ? (
+              <>
+                <Text style={styles.recoveryTitle}>Use email instead</Text>
+                <Text style={styles.recoveryDetail}>
+                  We sent a login code to your account email. Enter it below to finish signing in. This
+                  turns off 2FA on your account.
+                </Text>
+                <TextInput
+                  value={recoveryCode}
+                  onChangeText={setRecoveryCode}
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  maxLength={6}
+                  placeholder="123456"
+                  style={styles.input}
+                />
+                {recovery?.error ? <Text style={styles.errorText}>{recovery.error}</Text> : null}
+                <View style={styles.challengeActions}>
+                  <Pressable
+                    style={[styles.challengeButton, styles.cancelButton]}
+                    onPress={onRequestRecovery}
+                    disabled={Boolean(recovery?.sending)}
+                  >
+                    <Text style={styles.cancelText}>
+                      {recovery?.sending ? "Sending…" : "Resend code"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.challengeButton,
+                      styles.submitButton,
+                      (recovery?.verifying || recoveryCode.trim().length < 6) && styles.disabled,
+                    ]}
+                    onPress={handleRecoverySubmit}
+                    disabled={recovery?.verifying || recoveryCode.trim().length < 6}
+                  >
+                    <Text style={styles.submitText}>
+                      {recovery?.verifying ? "Verifying…" : "Use email code"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <Pressable style={styles.recoveryButton} onPress={onRequestRecovery}>
+                <Text style={styles.recoveryButtonText}>
+                  Can't access your authenticator? Email a login code.
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        ) : null}
       </View>
     </TouchableWithoutFeedback>
   );
@@ -154,5 +235,33 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
+  },
+  recoverySection: {
+    marginTop: Theme.spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Theme.palette.border,
+    paddingTop: Theme.spacing.lg,
+    gap: Theme.spacing.sm,
+  },
+  recoveryTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  recoveryDetail: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  recoveryButton: {
+    borderRadius: Theme.radii.md,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    padding: Theme.spacing.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recoveryButtonText: {
+    color: Theme.palette.ink,
+    fontWeight: "600",
   },
 });

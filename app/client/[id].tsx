@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,7 +26,11 @@ import { paymentLogos } from "@/data/payment-methods";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClient } from "@/services/clients";
-import { fetchInvoices } from "@/services/invoices";
+import {
+  fetchInvoices,
+  markInvoicePaid,
+  markInvoiceUnpaid,
+} from "@/services/invoices";
 import type { Client, ContactMethod } from "@/types/clients";
 import type { Invoice } from "@/types/invoices";
 import type {
@@ -59,6 +64,12 @@ export default function ClientDetailScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [confirmAction, setConfirmAction] = useState<{
+    invoice: Invoice;
+    mode: "markPaid" | "markUnpaid";
+  } | null>(null);
+  const [actionProcessing, setActionProcessing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const reminders = useMemo(() => {
     if (id && clientProfiles[id]?.reminders?.length) {
@@ -121,6 +132,45 @@ export default function ClientDetailScreen() {
     loadClient();
   }, [id, session?.accessToken]);
 
+  const requestInvoiceAction = (invoice: Invoice) => {
+    const mode = invoice.status === "paid" ? "markUnpaid" : "markPaid";
+    setActionError(null);
+    setConfirmAction({ invoice, mode });
+  };
+
+  const handleInvoiceAction = async () => {
+    if (!confirmAction || !session?.accessToken) return;
+    setActionProcessing(true);
+    setActionError(null);
+    try {
+      const updatedInvoice =
+        confirmAction.mode === "markPaid"
+          ? await markInvoicePaid(confirmAction.invoice.id, session.accessToken)
+          : await markInvoiceUnpaid(
+              confirmAction.invoice.id,
+              session.accessToken
+            );
+      setInvoices((prev) => {
+        const next = prev.map((item) =>
+          item.id === updatedInvoice.id ? updatedInvoice : item
+        );
+        if (id) {
+          setCachedValue(CLIENT_INVOICES_CACHE_KEY(id), next);
+        }
+        return next;
+      });
+      setConfirmAction(null);
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update this invoice. Try again."
+      );
+    } finally {
+      setActionProcessing(false);
+    }
+  };
+
   if (!id) {
     return <NotFoundState onBack={() => router.back()} />;
   }
@@ -144,6 +194,25 @@ export default function ClientDetailScreen() {
       />
     );
   }
+
+  const clientFriendlyName =
+    client.name && client.name.trim().length > 0
+      ? client.name
+      : "your client";
+  const confirmCopy = confirmAction
+    ? confirmAction.mode === "markPaid"
+      ? {
+          title: "Confirm payment",
+          message: `DueSoon will mark this invoice as paid, pause reminders, and notify ${clientFriendlyName} that you've confirmed their payment.`,
+          confirmLabel: "Confirm payment",
+        }
+      : {
+          title: "Mark as unpaid",
+          message:
+            "We’ll clear the paid timestamp, move this invoice back to collecting, and resume reminders based on its schedule.",
+          confirmLabel: "Mark unpaid",
+        }
+    : null;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -196,46 +265,135 @@ export default function ClientDetailScreen() {
               No reminders on record for this client.
             </Text>
           ) : (
-            invoices.map((invoice) => (
-              <View key={invoice.id} style={styles.reminderBlock}>
-                <View style={styles.reminderHeader}>
-                  <Text style={styles.reminderAmount}>
-                    {formatCurrency(invoice.amount, invoice.currency)}
+            invoices.map((invoice) => {
+              const isPaid = invoice.status === "paid";
+              return (
+                <View key={invoice.id} style={styles.reminderBlock}>
+                  <View style={styles.reminderHeader}>
+                    <Text style={styles.reminderAmount}>
+                      {formatCurrency(invoice.amount, invoice.currency)}
+                    </Text>
+                    <Text style={styles.reminderStatus}>
+                      {invoice.status}
+                    </Text>
+                  </View>
+                  <Text style={styles.reminderDesc}>
+                    {invoice.description || "No notes added."}
                   </Text>
-                  <Text style={styles.reminderStatus}>{invoice.status}</Text>
-                </View>
-                <Text style={styles.reminderDesc}>
-                  {invoice.description || "No notes added."}
-                </Text>
-                <InfoRow
-                  label="Due date"
-                  value={formatFriendlyDate(invoice.due_date, true)}
-                />
-                <InfoRow
-                  label="Delivery channel"
-                  value={formatSendVia(invoice.send_via)}
-                />
-                {invoice.reminder_schedule ? (
-                  <ScheduleDetails
-                    schedule={invoice.reminder_schedule as ReminderSchedule}
-                    dueDate={invoice.due_date || ""}
+                  <InfoRow
+                    label="Due date"
+                    value={formatFriendlyDate(invoice.due_date, true)}
                   />
-                ) : null}
-                {invoice.payment_instructions?.length ? (
-                  invoice.payment_instructions.map((instruction, idx) => (
-                    <PaymentInstructionCard
-                      key={`${invoice.id}-${instruction.type}-${idx}`}
-                      instruction={instruction}
+                  <InfoRow
+                    label="Delivery channel"
+                    value={formatSendVia(invoice.send_via)}
+                  />
+                  {invoice.reminder_schedule ? (
+                    <ScheduleDetails
+                      schedule={invoice.reminder_schedule as ReminderSchedule}
+                      dueDate={invoice.due_date || ""}
                     />
-                  ))
-                ) : reminders[0]?.payment_method ? (
-                  <PaymentMethodCard method={reminders[0].payment_method} />
-                ) : null}
-              </View>
-            ))
+                  ) : null}
+                  {invoice.payment_instructions?.length ? (
+                    invoice.payment_instructions.map((instruction, idx) => (
+                      <PaymentInstructionCard
+                        key={`${invoice.id}-${instruction.type}-${idx}`}
+                        instruction={instruction}
+                      />
+                    ))
+                  ) : reminders[0]?.payment_method ? (
+                    <PaymentMethodCard method={reminders[0].payment_method} />
+                  ) : null}
+                  <View style={styles.invoiceActions}>
+                    <Pressable
+                      style={[
+                        styles.invoiceActionButton,
+                        isPaid
+                          ? styles.invoiceActionButtonSecondary
+                          : styles.invoiceActionButtonPrimary,
+                      ]}
+                      onPress={() => requestInvoiceAction(invoice)}
+                    >
+                      <Feather
+                        name={isPaid ? "rotate-ccw" : "check-circle"}
+                        size={16}
+                        color={isPaid ? Theme.palette.ink : "#FFFFFF"}
+                      />
+                      <Text
+                        style={[
+                          styles.invoiceActionLabel,
+                          isPaid
+                            ? styles.invoiceActionLabelSecondary
+                            : styles.invoiceActionLabelPrimary,
+                        ]}
+                      >
+                        {isPaid ? "Mark as unpaid" : "Confirm payment"}
+                      </Text>
+                    </Pressable>
+                    <Text style={styles.invoiceActionHint}>
+                      {isPaid
+                        ? "Switch this back to collecting and restart reminders."
+                        : `DueSoon emails ${clientFriendlyName} right after you confirm payment.`}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })
           )}
         </View>
       </ScrollView>
+      <Modal
+        visible={Boolean(confirmAction)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setConfirmAction(null);
+          setActionError(null);
+        }}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>
+              {confirmCopy?.title ?? "Confirm"}
+            </Text>
+            <Text style={styles.confirmMessage}>
+              {confirmCopy?.message ?? ""}
+            </Text>
+            {actionError ? (
+              <Text style={styles.actionErrorText}>{actionError}</Text>
+            ) : null}
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={[styles.confirmButton, styles.confirmButtonMuted]}
+                onPress={() => {
+                  setConfirmAction(null);
+                  setActionError(null);
+                }}
+                disabled={actionProcessing}
+              >
+                <Text style={styles.confirmButtonMutedLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.confirmButton,
+                  styles.confirmButtonPrimary,
+                  actionProcessing && styles.confirmButtonDisabled,
+                ]}
+                onPress={handleInvoiceAction}
+                disabled={actionProcessing}
+              >
+                {actionProcessing ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmButtonPrimaryLabel}>
+                    {confirmCopy?.confirmLabel ?? "Confirm"}
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1100,6 +1258,43 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Theme.palette.inkMuted,
   },
+  invoiceActions: {
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: Theme.palette.border,
+    paddingTop: Theme.spacing.sm,
+  },
+  invoiceActionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Theme.spacing.xs,
+    paddingVertical: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+  },
+  invoiceActionButtonPrimary: {
+    backgroundColor: Theme.palette.ink,
+  },
+  invoiceActionButtonSecondary: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: Theme.palette.surface,
+  },
+  invoiceActionLabel: {
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  invoiceActionLabelPrimary: {
+    color: "#FFFFFF",
+  },
+  invoiceActionLabelSecondary: {
+    color: Theme.palette.ink,
+  },
+  invoiceActionHint: {
+    fontSize: 12,
+    color: Theme.palette.slateSoft,
+    lineHeight: 18,
+  },
   emptyState: {
     flex: 1,
     alignItems: "center",
@@ -1171,5 +1366,65 @@ const styles = StyleSheet.create({
     borderColor: Theme.palette.border,
     color: Theme.palette.slate,
     fontSize: 12,
+  },
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(28, 31, 35, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  confirmCard: {
+    width: "100%",
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  confirmTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  confirmMessage: {
+    fontSize: 15,
+    color: Theme.palette.slate,
+    lineHeight: 22,
+  },
+  confirmActions: {
+    flexDirection: "row",
+    gap: Theme.spacing.sm,
+  },
+  confirmButton: {
+    flex: 1,
+    paddingVertical: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmButtonMuted: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: Theme.palette.surface,
+  },
+  confirmButtonPrimary: {
+    backgroundColor: Theme.palette.ink,
+  },
+  confirmButtonDisabled: {
+    opacity: 0.7,
+  },
+  confirmButtonMutedLabel: {
+    color: Theme.palette.ink,
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  confirmButtonPrimaryLabel: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  actionErrorText: {
+    color: Theme.palette.accent,
+    fontSize: 13,
   },
 });

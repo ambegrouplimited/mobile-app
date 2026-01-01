@@ -22,6 +22,9 @@ import { Theme } from "@/constants/theme";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
 import { useAuth } from "@/providers/auth-provider";
 import Clipboard from "@react-native-clipboard/clipboard";
+import { formatRelativeTime } from "@/lib/date";
+import { fetchSessions, revokeSession } from "@/services/security";
+import type { SessionInfo } from "@/types/security";
 
 import {
   beginTwoFactorSetup,
@@ -33,42 +36,15 @@ import {
   TwoFactorStatus,
 } from "@/services/two-factor";
 
-type Session = {
-  id: string;
-  device: string;
-  location: string;
-  lastActive: string;
-  current?: boolean;
-};
-
-const initialSessions: Session[] = [
-  {
-    id: "current",
-    device: "MacBook Pro · Chrome",
-    location: "San Francisco, CA",
-    lastActive: "Active now",
-    current: true,
-  },
-  {
-    id: "ios",
-    device: "iPhone 15 · DueSoon app",
-    location: "Oakland, CA",
-    lastActive: "2 hours ago",
-  },
-  {
-    id: "ipad",
-    device: "iPad Pro · Safari",
-    location: "Los Angeles, CA",
-    lastActive: "Yesterday",
-  },
-];
-
 const TWO_FACTOR_CACHE_KEY = "cache.security.twoFactorStatus";
+const SESSIONS_CACHE_KEY = "cache.security.sessions";
 
 export default function SecuritySettingsScreen() {
   const router = useRouter();
   const { session, user } = useAuth();
-  const [sessions, setSessions] = useState(initialSessions);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [twoFactorStatus, setTwoFactorStatus] =
     useState<TwoFactorStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -92,10 +68,21 @@ export default function SecuritySettingsScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const handleLogOutSession = async (id: string) => {
+    if (!session?.accessToken) {
+      setSessionsError("Sign in again to manage sessions.");
+      return;
+    }
     await Haptics.selectionAsync();
-    setSessions((prev) =>
-      prev.filter((session) => session.id !== id || session.current)
-    );
+    try {
+      await revokeSession(id, session.accessToken);
+      setSessions((prev) => prev.filter((entry) => entry.id !== id));
+    } catch (err) {
+      setSessionsError(
+        err instanceof Error
+          ? err.message
+          : "Unable to sign out this session right now."
+      );
+    }
   };
 
   const loadStatus = useCallback(async () => {
@@ -121,6 +108,27 @@ export default function SecuritySettingsScreen() {
     }
   }, [session?.accessToken]);
 
+  const loadSessions = useCallback(async () => {
+    if (!session?.accessToken) {
+      setSessions([]);
+      setSessionsError("Sign in to see active sessions.");
+      return;
+    }
+    setSessionsLoading(true);
+    setSessionsError(null);
+    try {
+      const response = await fetchSessions(session.accessToken);
+      setSessions(response);
+      await setCachedValue(SESSIONS_CACHE_KEY, response);
+    } catch (err) {
+      setSessionsError(
+        err instanceof Error ? err.message : "Unable to load sessions."
+      );
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [session?.accessToken]);
+
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
@@ -130,15 +138,21 @@ export default function SecuritySettingsScreen() {
       if (!cancelled && cached) {
         setTwoFactorStatus(cached);
       }
+      const cachedSessions = await getCachedValue<SessionInfo[]>(
+        SESSIONS_CACHE_KEY
+      );
+      if (!cancelled && cachedSessions) {
+        setSessions(cachedSessions);
+      }
       if (!cancelled) {
-        await loadStatus();
+        await Promise.all([loadStatus(), loadSessions()]);
       }
     };
     hydrate();
     return () => {
       cancelled = true;
     };
-  }, [loadStatus]);
+  }, [loadSessions, loadStatus]);
 
   const handleSendEmailOtp = useCallback(async () => {
     if (!session?.accessToken) {
@@ -298,13 +312,13 @@ export default function SecuritySettingsScreen() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await loadStatus();
+      await Promise.all([loadStatus(), loadSessions()]);
     } catch (error) {
       console.warn("Failed to refresh security status", error);
     } finally {
       setRefreshing(false);
     }
-  }, [loadStatus]);
+  }, [loadSessions, loadStatus]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -558,37 +572,80 @@ export default function SecuritySettingsScreen() {
               Signed-in devices that can access DueSoon.
             </Text>
           </View>
-          {sessions.map((session, index) => (
-            <View
-              key={session.id}
-              style={[
-                styles.sessionRow,
-                index === sessions.length - 1 && styles.sessionRowLast,
-              ]}
-            >
-              <View style={styles.sessionInfo}>
-                <Text style={styles.sessionDevice}>{session.device}</Text>
-                <Text style={styles.sessionMeta}>{session.location}</Text>
-                <Text style={styles.sessionMeta}>{session.lastActive}</Text>
-              </View>
-              {session.current ? (
-                <View style={styles.currentBadge}>
-                  <Text style={styles.currentBadgeText}>This device</Text>
-                </View>
-              ) : (
-                <Pressable
-                  style={styles.logOutButton}
-                  onPress={() => handleLogOutSession(session.id)}
-                >
-                  <Text style={styles.logOutButtonText}>Log out</Text>
-                </Pressable>
-              )}
+          {sessionsLoading && sessions.length === 0 ? (
+            <View style={styles.sessionRow}>
+              <Text style={styles.sessionMeta}>Loading sessions…</Text>
             </View>
-          ))}
+          ) : sessionsError ? (
+            <View style={styles.sessionRow}>
+              <Text style={styles.errorText}>{sessionsError}</Text>
+            </View>
+          ) : sessions.length === 0 ? (
+            <View style={styles.sessionRow}>
+              <Text style={styles.sessionMeta}>
+                No active sessions. Sign in on another device to see it here.
+              </Text>
+            </View>
+          ) : (
+            sessions.map((session, index) => {
+              const deviceLabel = buildSessionDeviceLabel(session);
+              const locationLabel = session.location || session.ip_address || "Unknown location";
+              const lastActive = session.last_active
+                ? formatRelativeTime(session.last_active)
+                : "Unknown activity";
+              return (
+                <View
+                  key={session.id}
+                  style={[
+                    styles.sessionRow,
+                    index === sessions.length - 1 && styles.sessionRowLast,
+                  ]}
+                >
+                  <View style={styles.sessionInfo}>
+                    <Text style={styles.sessionDevice}>{deviceLabel}</Text>
+                    <Text style={styles.sessionMeta}>{locationLabel}</Text>
+                    <Text style={styles.sessionMeta}>{lastActive}</Text>
+                  </View>
+                  {session.current ? (
+                    <View style={styles.currentBadge}>
+                      <Text style={styles.currentBadgeText}>This device</Text>
+                    </View>
+                  ) : (
+                    <Pressable
+                      style={styles.logOutButton}
+                      onPress={() => handleLogOutSession(session.id)}
+                    >
+                      <Text style={styles.logOutButtonText}>Log out</Text>
+                    </Pressable>
+                  )}
+                </View>
+              );
+            })
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function buildSessionDeviceLabel(session: SessionInfo) {
+  const platformLabel = formatPlatformLabel(session.platform);
+  const base = session.device_name || session.user_agent || "Unknown device";
+  if (platformLabel) {
+    return `${base} · ${platformLabel}`;
+  }
+  return base;
+}
+
+function formatPlatformLabel(value?: string | null) {
+  if (!value) {
+    return "";
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === "ios") return "iOS";
+  if (normalized === "android") return "Android";
+  if (normalized === "web") return "Web";
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 const styles = StyleSheet.create({

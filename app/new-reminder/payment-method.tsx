@@ -21,6 +21,7 @@ import {
   presentPaymentMethod,
   type PaymentMethodListItem,
 } from "@/lib/payment-methods";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchPaymentMethods } from "@/services/payment-methods";
 import type { PaymentMethod } from "@/types/payment-methods";
@@ -30,6 +31,12 @@ export default function ReminderPaymentMethodScreen() {
   const { session } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
   const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const draftId = persistedParams.draftId ?? null;
+  const baseParams = useMemo(() => {
+    const next = { ...persistedParams };
+    delete next.draftId;
+    return next;
+  }, [persistedParams]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [items, setItems] = useState<PaymentMethodListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +93,56 @@ export default function ReminderPaymentMethodScreen() {
     () => methods.find((method) => method.id === selectedId) ?? null,
     [methods, selectedId],
   );
+  const paymentSummaryString = useMemo(() => {
+    if (selectedMethod) {
+      return JSON.stringify(buildPaymentSummary(selectedMethod));
+    }
+    return baseParams.payment ?? "";
+  }, [baseParams.payment, selectedMethod]);
+  const paramsForDraft = useMemo(() => {
+    const next: Record<string, string> = { ...baseParams };
+    if (selectedId) {
+      next.paymentMethodId = selectedId;
+    }
+    if (paymentSummaryString) {
+      next.payment = paymentSummaryString;
+    }
+    return next;
+  }, [baseParams, paymentSummaryString, selectedId]);
+  const metadata = useMemo(
+    () => ({
+      client_name: baseParams.client || "New reminder",
+      amount_display: baseParams.amount || null,
+      status: selectedMethod ? "Payment method ready" : "Attach a payment method",
+      next_action: selectedMethod ? "Schedule the reminder cadence." : "Choose how clients will pay.",
+    }),
+    [baseParams.amount, baseParams.client, selectedMethod],
+  );
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
+  };
+  const handleBack = () => {
+    if (draftId) {
+      router.push({
+        pathname: "/new-reminder/send-options",
+        params: {
+          ...baseParams,
+          ...(draftId ? { draftId } : {}),
+        },
+      });
+      return;
+    }
+    router.back();
+  };
+  const { ensureDraftSaved } = useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    params: paramsForDraft,
+    metadata,
+    lastStep: "payment-method",
+    lastPath: "/new-reminder/payment-method",
+    enabled: Boolean(session?.accessToken && draftId),
+  });
 
   const handleContinue = async () => {
     if (!selectedMethod) {
@@ -96,13 +153,16 @@ export default function ReminderPaymentMethodScreen() {
     try {
       await Haptics.selectionAsync();
       const summaryPayload = buildPaymentSummary(selectedMethod);
+      const savedDraftId = await ensureDraftSaved();
+      const nextParams = {
+        ...baseParams,
+        paymentMethodId: selectedMethod.id,
+        payment: JSON.stringify(summaryPayload),
+        ...(savedDraftId ? { draftId: savedDraftId } : {}),
+      };
       router.push({
         pathname: "/new-reminder/schedule",
-        params: {
-          ...persistedParams,
-          paymentMethodId: selectedMethod.id,
-          payment: JSON.stringify(summaryPayload),
-        },
+        params: nextParams,
       });
     } finally {
       setSubmitting(false);
@@ -174,10 +234,18 @@ export default function ReminderPaymentMethodScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable style={styles.backLink} onPress={() => router.back()}>
-          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
-          <Text style={styles.backLabel}>Delivery settings</Text>
-        </Pressable>
+        <View style={styles.navRow}>
+          <Pressable style={styles.backLink} onPress={handleBack}>
+            <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Delivery settings</Text>
+          </Pressable>
+          {draftId ? (
+            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+              <Feather name="home" size={18} color={Theme.palette.slate} />
+              <Text style={styles.remindersLabel}>Reminders</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>Attach a payment method</Text>
@@ -244,12 +312,26 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
   },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   backLink: {
     flexDirection: "row",
     alignItems: "center",
     gap: Theme.spacing.xs,
   },
   backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  remindersLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  remindersLabel: {
     fontSize: 14,
     color: Theme.palette.slate,
   },

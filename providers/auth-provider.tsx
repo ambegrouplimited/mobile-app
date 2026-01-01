@@ -26,6 +26,8 @@ import {
   exchangeGoogleIdToken,
   getAuthorizationUrl,
   refreshAuthTokens,
+  requestTwoFactorRecovery,
+  confirmTwoFactorRecovery,
   updateCurrentUser,
   verifyTwoFactorCode,
 } from "@/services/auth";
@@ -51,6 +53,13 @@ type NotificationSettingsPayload = {
   };
 };
 
+type TwoFactorRecoveryState = {
+  requested: boolean;
+  sending: boolean;
+  verifying: boolean;
+  error: string | null;
+};
+
 type AuthContextValue = {
   status: AuthStatus;
   user: AuthUser | null;
@@ -69,6 +78,14 @@ type AuthContextValue = {
   cancelTwoFactorChallenge: () => void;
   twoFactorError: string | null;
   twoFactorVerifying: boolean;
+  twoFactorRecovery: {
+    requested: boolean;
+    sending: boolean;
+    verifying: boolean;
+    error: string | null;
+  };
+  requestTwoFactorRecovery: () => Promise<void>;
+  submitTwoFactorRecovery: (code: string) => Promise<void>;
   updateUserProfile: (payload: {
     name?: string;
     type?: string;
@@ -82,6 +99,12 @@ const STORAGE_KEY = "duesoon.session";
 const AUTH_DISABLED = false;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
+const INITIAL_TWO_FACTOR_RECOVERY_STATE: TwoFactorRecoveryState = {
+  requested: false,
+  sending: false,
+  verifying: false,
+  error: null,
+};
 
 async function storageGet() {
   if (await SecureStore.isAvailableAsync()) {
@@ -209,6 +232,14 @@ function DisabledAuthProvider({ children }: { children: ReactNode }) {
       cancelTwoFactorChallenge: () => {},
       twoFactorError: null,
       twoFactorVerifying: false,
+      twoFactorRecovery: {
+        requested: false,
+        sending: false,
+        verifying: false,
+        error: null,
+      },
+      requestTwoFactorRecovery: async () => {},
+      submitTwoFactorRecovery: async () => {},
       updateUserProfile: async () => {},
     }),
     []
@@ -247,6 +278,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
   const [twoFactorVerifying, setTwoFactorVerifying] = useState(false);
+  const [twoFactorRecoveryState, setTwoFactorRecoveryState] =
+    useState<TwoFactorRecoveryState>(INITIAL_TWO_FACTOR_RECOVERY_STATE);
+  const resetTwoFactorRecoveryState = useCallback(() => {
+    setTwoFactorRecoveryState(INITIAL_TWO_FACTOR_RECOVERY_STATE);
+  }, []);
 
   useEffect(() => {
     if (!GOOGLE_WEB_CLIENT_ID) {
@@ -298,7 +334,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTwoFactorChallengeState(null);
     setTwoFactorError(null);
     setTwoFactorVerifying(false);
-  }, [clearSession]);
+    resetTwoFactorRecoveryState();
+  }, [clearSession, resetTwoFactorRecoveryState]);
 
   const removeRegisteredPushToken = useCallback(async (authToken?: string) => {
     const token = pushTokenRef.current;
@@ -600,6 +637,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           token: tokenPayload.two_factor_token,
           user: tokenPayload.user,
         });
+        resetTwoFactorRecoveryState();
         setIsAuthenticating(false);
         return;
       }
@@ -617,7 +655,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsAuthenticating(false);
     }
-  }, [persistSession, session]);
+  }, [persistSession, resetTwoFactorRecoveryState, session]);
 
   const startOAuth = useCallback(
     async (provider: OAuthProvider) => {
@@ -678,6 +716,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             token: tokenPayload.two_factor_token,
             user: tokenPayload.user,
           });
+          resetTwoFactorRecoveryState();
           setTwoFactorError(null);
           return;
         }
@@ -699,7 +738,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         prefetchAuthUrl(provider);
       }
     },
-    [oauthCache, persistSession, prefetchAuthUrl, session]
+    [oauthCache, persistSession, prefetchAuthUrl, resetTwoFactorRecoveryState, session]
   );
 
   const submitTwoFactorCode = useCallback(
@@ -715,6 +754,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           code: code.trim(),
         });
         setTwoFactorChallengeState(null);
+        resetTwoFactorRecoveryState();
         await persistSession(payload);
       } catch (err) {
         setTwoFactorError(
@@ -726,13 +766,79 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTwoFactorVerifying(false);
       }
     },
-    [persistSession, twoFactorChallengeState]
+    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState]
   );
 
   const cancelTwoFactorChallenge = useCallback(() => {
     setTwoFactorChallengeState(null);
     setTwoFactorError(null);
-  }, []);
+    resetTwoFactorRecoveryState();
+  }, [resetTwoFactorRecoveryState]);
+
+  const requestTwoFactorRecoveryHandler = useCallback(async () => {
+    if (!twoFactorChallengeState) {
+      return;
+    }
+    setTwoFactorRecoveryState((prev) => ({
+      ...prev,
+      sending: true,
+      error: null,
+    }));
+    try {
+      await requestTwoFactorRecovery(twoFactorChallengeState.token);
+      setTwoFactorRecoveryState({
+        requested: true,
+        sending: false,
+        verifying: false,
+        error: null,
+      });
+    } catch (err) {
+      setTwoFactorRecoveryState((prev) => ({
+        ...prev,
+        sending: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Unable to send a recovery code right now.",
+      }));
+    }
+  }, [twoFactorChallengeState]);
+
+  const submitTwoFactorRecovery = useCallback(
+    async (code: string) => {
+      if (!twoFactorChallengeState) {
+        return;
+      }
+      setTwoFactorRecoveryState((prev) => ({
+        ...prev,
+        verifying: true,
+        error: null,
+      }));
+      try {
+        const payload = await confirmTwoFactorRecovery({
+          twoFactorToken: twoFactorChallengeState.token,
+          emailCode: code.trim(),
+        });
+        setTwoFactorChallengeState(null);
+        resetTwoFactorRecoveryState();
+        await persistSession(payload);
+      } catch (err) {
+        setTwoFactorRecoveryState((prev) => ({
+          ...prev,
+          error:
+            err instanceof Error
+              ? err.message
+              : "Unable to verify the recovery code.",
+        }));
+      } finally {
+        setTwoFactorRecoveryState((prev) => ({
+          ...prev,
+          verifying: false,
+        }));
+      }
+    },
+    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState]
+  );
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -756,9 +862,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelTwoFactorChallenge,
       twoFactorError,
       twoFactorVerifying,
+      twoFactorRecovery: twoFactorRecoveryState,
+      requestTwoFactorRecovery: requestTwoFactorRecoveryHandler,
+      submitTwoFactorRecovery,
       updateUserProfile,
     }),
     [
+      cancelTwoFactorChallenge,
       error,
       googleReady,
       isAuthenticating,
@@ -771,10 +881,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       startOAuth,
       status,
       submitTwoFactorCode,
-      cancelTwoFactorChallenge,
+      requestTwoFactorRecoveryHandler,
+      submitTwoFactorRecovery,
       twoFactorChallengeState?.user,
       twoFactorError,
       twoFactorVerifying,
+      twoFactorRecoveryState,
     ]
   );
 

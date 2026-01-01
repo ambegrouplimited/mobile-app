@@ -4,7 +4,7 @@ import type { PaymentMethodDetails } from "./payment-methods";
 export type DeliveryChannel = "mailgun" | "gmail" | "outlook" | "whatsapp" | "telegram" | "slack" | "auto";
 export type ReminderTone = "gentle" | "neutral" | "firm";
 export type ReminderStatus = "pending" | "queued" | "sending" | "sent" | "skipped" | "failed";
-export type InvoiceStatus = "draft" | "active" | "paid" | "paused";
+export type InvoiceStatus = "draft" | "active" | "paid" | "paused" | "overdue";
 
 export type ReminderScheduleMode = "manual" | "weekly" | "cadence";
 

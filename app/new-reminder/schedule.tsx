@@ -6,7 +6,7 @@ import DateTimePicker, {
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Platform } from "react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -19,6 +19,8 @@ import { Modal, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
+import { useAuth } from "@/providers/auth-provider";
 
 const MODES = ["manual", "weekly", "cadence"] as const;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -61,8 +63,15 @@ type ToneOption = "gentle" | "firm";
 
 export default function ScheduleScreen() {
   const router = useRouter();
+  const { session } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
   const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const draftId = persistedParams.draftId ?? null;
+  const baseParams = useMemo(() => {
+    const next = { ...persistedParams };
+    delete next.draftId;
+    return next;
+  }, [persistedParams]);
   const { width: screenWidth } = useWindowDimensions();
   const [mode, setMode] = useState<(typeof MODES)[number]>("manual");
   const todayISO = useMemo(() => formatISODate(new Date()), []);
@@ -79,6 +88,7 @@ export default function ScheduleScreen() {
   const [cadenceStartTime, setCadenceStartTime] = useState("09:00");
   const [cadenceMax, setCadenceMax] = useState("5");
   const [cadenceTones, setCadenceTones] = useState<ToneOption[]>(() => buildToneArray(Number("5")));
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
     const count = Math.max(1, Number(weeklyMax) || 1);
@@ -89,6 +99,64 @@ export default function ScheduleScreen() {
     const count = Math.max(1, Number(cadenceMax) || 1);
     setCadenceTones((prev) => resizeToneArray(prev, count));
   }, [cadenceMax]);
+
+  useEffect(() => {
+    if (hydratedRef.current) {
+      return;
+    }
+    const modeParam = persistedParams.scheduleMode;
+    const summaryRaw = persistedParams.scheduleSummary;
+    if (modeParam && (MODES as readonly string[]).includes(modeParam as string)) {
+      setMode(modeParam as (typeof MODES)[number]);
+    }
+    if (summaryRaw) {
+      try {
+        const summary = JSON.parse(summaryRaw);
+        if (modeParam === "manual" && Array.isArray(summary.entries) && summary.entries.length) {
+          setManualTimes(
+            summary.entries.map((entry: any, index: number) => ({
+              id: entry.id ?? `manual-${index}`,
+              date: entry.date ?? todayISO,
+              time: entry.time ?? "09:00",
+              tone: (entry.tone as ToneOption) ?? "gentle",
+            })),
+          );
+        } else if (modeParam === "weekly" && summary) {
+          if (Array.isArray(summary.days) && summary.days.length) {
+            setWeeklyDays(summary.days);
+          }
+          if (typeof summary.time === "string") {
+            setWeeklyTime(summary.time);
+          }
+          if (summary.maxReminders) {
+            setWeeklyMax(String(summary.maxReminders));
+          }
+          if (Array.isArray(summary.tones) && summary.tones.length) {
+            setWeeklyTones(summary.tones as ToneOption[]);
+          }
+        } else if (modeParam === "cadence" && summary) {
+          if (summary.frequencyDays) {
+            setCadenceFreq(String(summary.frequencyDays));
+          }
+          if (summary.startDate) {
+            setCadenceStartDate(summary.startDate);
+          }
+          if (summary.startTime) {
+            setCadenceStartTime(summary.startTime);
+          }
+          if (summary.maxReminders) {
+            setCadenceMax(String(summary.maxReminders));
+          }
+          if (Array.isArray(summary.tones) && summary.tones.length) {
+            setCadenceTones(summary.tones as ToneOption[]);
+          }
+        }
+      } catch {
+        // Ignore malformed summary payloads.
+      }
+    }
+    hydratedRef.current = true;
+  }, [persistedParams.scheduleMode, persistedParams.scheduleSummary, todayISO]);
 
   const toggleWeeklyDay = (index: number) => {
     setWeeklyDays((prev) =>
@@ -167,41 +235,95 @@ export default function ScheduleScreen() {
     (mode === "manual" && manualTimes.length > 0 && manualTimes.every((entry) => Boolean(entry.time.trim()))) ||
     (mode === "weekly" && weeklyDays.length > 0 && Boolean(weeklyTime.trim())) ||
     (mode === "cadence" && Number(cadenceFreq) > 0 && Boolean(cadenceStartTime.trim()));
+  const scheduleSummaryPayload = useMemo(
+    () =>
+      buildScheduleSummaryPayload({
+        mode,
+        manualTimes,
+        weeklyDays,
+        weeklyTime,
+        weeklyMax,
+        weeklyTones,
+        cadenceFreq,
+        cadenceStartDate,
+        cadenceStartTime,
+        cadenceMax,
+        cadenceTones,
+      }),
+    [
+      cadenceFreq,
+      cadenceMax,
+      cadenceStartDate,
+      cadenceStartTime,
+      cadenceTones,
+      manualTimes,
+      mode,
+      weeklyDays,
+      weeklyMax,
+      weeklyTime,
+      weeklyTones,
+    ],
+  );
+  const scheduleSummaryString = useMemo(
+    () => JSON.stringify(scheduleSummaryPayload),
+    [scheduleSummaryPayload],
+  );
+  const paramsForDraft = useMemo(() => {
+    const next: Record<string, string> = { ...baseParams };
+    next.scheduleMode = mode;
+    next.scheduleSummary = scheduleSummaryString;
+    return next;
+  }, [baseParams, mode, scheduleSummaryString]);
+  const metadata = useMemo(
+    () => ({
+      client_name: baseParams.client || "New reminder",
+      amount_display: baseParams.amount || null,
+      status:
+        mode === "manual"
+          ? `Manual (${manualTimes.length} dates)`
+          : mode === "weekly"
+            ? `Weekly cadence (${weeklyDays.length} days)`
+            : `Cadence every ${cadenceFreq || "?"} days`,
+      next_action: "Review the reminder summary.",
+    }),
+    [baseParams.amount, baseParams.client, cadenceFreq, manualTimes.length, mode, weeklyDays.length],
+  );
+  const { ensureDraftSaved } = useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    params: paramsForDraft,
+    metadata,
+    lastStep: "schedule",
+    lastPath: "/new-reminder/schedule",
+    enabled: Boolean(session?.accessToken && draftId),
+  });
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
+  };
+  const handleBack = () => {
+    if (draftId) {
+      router.push({
+        pathname: "/new-reminder/payment-method",
+        params: {
+          ...baseParams,
+          ...(draftId ? { draftId } : {}),
+        },
+      });
+      return;
+    }
+    router.back();
+  };
 
   const handleSaveSchedule = async () => {
     await Haptics.selectionAsync();
-    let payload: Record<string, unknown>;
-    if (mode === "manual") {
-      payload = {
-        entries: manualTimes.map((entry) => ({
-          date: entry.date,
-          time: entry.time,
-          tone: entry.tone,
-        })),
-      };
-    } else if (mode === "weekly") {
-      payload = {
-        days: weeklyDays,
-        time: weeklyTime,
-        maxReminders: Number(weeklyMax) || 0,
-        tones: weeklyTones,
-      };
-    } else {
-      payload = {
-        frequencyDays: Number(cadenceFreq) || 0,
-        startDate: cadenceStartDate,
-        startTime: cadenceStartTime,
-        maxReminders: Number(cadenceMax) || 0,
-        tones: cadenceTones,
-      };
-    }
-
+    const savedDraftId = await ensureDraftSaved();
     router.push({
       pathname: "/new-reminder/summary",
       params: {
-        ...persistedParams,
+        ...baseParams,
         scheduleMode: mode,
-        scheduleSummary: JSON.stringify(payload),
+        scheduleSummary: scheduleSummaryString,
+        ...(savedDraftId ? { draftId: savedDraftId } : {}),
       },
     });
   };
@@ -209,10 +331,18 @@ export default function ScheduleScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Pressable style={styles.backLink} onPress={() => router.back()}>
-          <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
-          <Text style={styles.backLabel}>Back to payment method</Text>
-        </Pressable>
+        <View style={styles.navRow}>
+          <Pressable style={styles.backLink} onPress={handleBack}>
+            <Feather name="arrow-left" size={24} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Back to payment method</Text>
+          </Pressable>
+          {draftId ? (
+            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+              <Feather name="home" size={18} color={Theme.palette.slate} />
+              <Text style={styles.remindersLabel}>Reminders</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>Schedule reminders</Text>
@@ -485,12 +615,26 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
   },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   backLink: {
     flexDirection: "row",
     alignItems: "center",
     gap: Theme.spacing.xs,
   },
   backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  remindersLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  remindersLabel: {
     fontSize: 14,
     color: Theme.palette.slate,
   },
@@ -964,6 +1108,47 @@ function ToneSequencePicker({
       ))}
     </View>
   );
+}
+
+type ScheduleSummaryInput = {
+  mode: (typeof MODES)[number];
+  manualTimes: ManualEntry[];
+  weeklyDays: number[];
+  weeklyTime: string;
+  weeklyMax: string;
+  weeklyTones: ToneOption[];
+  cadenceFreq: string;
+  cadenceStartDate: string;
+  cadenceStartTime: string;
+  cadenceMax: string;
+  cadenceTones: ToneOption[];
+};
+
+function buildScheduleSummaryPayload(input: ScheduleSummaryInput) {
+  if (input.mode === "manual") {
+    return {
+      entries: input.manualTimes.map((entry) => ({
+        date: entry.date,
+        time: entry.time,
+        tone: entry.tone,
+      })),
+    };
+  }
+  if (input.mode === "weekly") {
+    return {
+      days: input.weeklyDays,
+      time: input.weeklyTime,
+      maxReminders: Number(input.weeklyMax) || 0,
+      tones: input.weeklyTones,
+    };
+  }
+  return {
+    frequencyDays: Number(input.cadenceFreq) || 0,
+    startDate: input.cadenceStartDate,
+    startTime: input.cadenceStartTime,
+    maxReminders: Number(input.cadenceMax) || 0,
+    tones: input.cadenceTones,
+  };
 }
 
 function normalizeParams(params: Record<string, string | string[]>) {

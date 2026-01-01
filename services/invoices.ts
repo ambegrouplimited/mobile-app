@@ -32,3 +32,10 @@ export function markInvoicePaid(id: string, token: string) {
     token,
   });
 }
+
+export function markInvoiceUnpaid(id: string, token: string) {
+  return apiFetch<Invoice>(`/api/invoices/${id}/mark-unpaid`, {
+    method: "POST",
+    token,
+  });
+}

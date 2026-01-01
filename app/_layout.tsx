@@ -43,6 +43,9 @@ export default function RootLayout() {
             <Stack.Screen name="new-reminder/payment-method" options={{ headerShown: false }} />
             <Stack.Screen name="new-reminder/schedule" options={{ headerShown: false }} />
             <Stack.Screen name="new-reminder/summary" options={{ headerShown: false }} />
+            <Stack.Screen name="past-clients" options={{ headerShown: false }} />
+            <Stack.Screen name="clients/not-paid" options={{ headerShown: false }} />
+            <Stack.Screen name="clients/paid" options={{ headerShown: false }} />
           </Stack>
           <StatusBar style="auto" />
         </KeyboardAvoidingView>

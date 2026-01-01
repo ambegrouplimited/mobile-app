@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import DateTimePicker, { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -18,6 +18,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
+import { MissingDetailsModal } from "@/components/new-reminder/MissingDetailsModal";
+import { SavedClientsSection } from "@/components/new-reminder/SavedClientsSection";
+import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
+import { getContactSummary, resolvePlatformFromMethod } from "@/lib/contact-methods";
+import { formatDueDateLabel, formatISODate, parseISOToDate } from "@/lib/date";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClients } from "@/services/clients";
 import type { Client, ContactMethod } from "@/types/clients";
@@ -31,14 +36,21 @@ const clientTypeLabels: Record<(typeof CLIENT_TYPES)[number], string> = {
 export default function NewReminderScreen() {
   const router = useRouter();
   const { session } = useAuth();
-  const [client, setClient] = useState("");
-  const [clientType, setClientType] = useState<(typeof CLIENT_TYPES)[number]>("business");
-  const [businessName, setBusinessName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState("");
-  const [notes, setNotes] = useState("");
+  const rawParams = useLocalSearchParams<Record<string, string>>();
+  const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const [draftId, setDraftId] = useState<string | null>(persistedParams.draftId ?? null);
+  const initialClientType: (typeof CLIENT_TYPES)[number] =
+    persistedParams.clientType === "individual" ? "individual" : "business";
+  const [client, setClient] = useState(persistedParams.client ?? "");
+  const [clientType, setClientType] = useState<(typeof CLIENT_TYPES)[number]>(initialClientType);
+  const [businessName, setBusinessName] = useState(persistedParams.businessName ?? "");
+  const [amount, setAmount] = useState(persistedParams.amount ?? "");
+  const [dueDate, setDueDate] = useState(persistedParams.dueDate ?? "");
+  const [notes, setNotes] = useState(persistedParams.notes ?? "");
   const [iosDatePickerVisible, setIosDatePickerVisible] = useState(false);
-  const [iosDateValue, setIosDateValue] = useState(() => new Date());
+  const [iosDateValue, setIosDateValue] = useState(() =>
+    persistedParams.dueDate ? parseISOToDate(persistedParams.dueDate) : new Date(),
+  );
   const [savedClients, setSavedClients] = useState<Client[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [clientsError, setClientsError] = useState<string | null>(null);
@@ -53,6 +65,55 @@ export default function NewReminderScreen() {
     if (!notes.trim()) missing.push("Client notes");
     return missing;
   }, [dueDate, notes]);
+  const [savedClientSearch, setSavedClientSearch] = useState("");
+
+  const hasDraftDetails =
+    Boolean(client.trim()) || Boolean(businessName.trim()) || Boolean(amount.trim()) || Boolean(dueDate) || Boolean(notes.trim());
+
+  const draftParams = useMemo(() => {
+    if (!hasDraftDetails) {
+      return {};
+    }
+    const payload: Record<string, string> = {};
+    payload.clientType = clientType;
+    payload.client = client.trim();
+    if (clientType === "business" && businessName.trim()) {
+      payload.businessName = businessName.trim();
+    }
+    if (amount.trim()) {
+      payload.amount = amount.trim();
+    }
+    if (dueDate) {
+      payload.dueDate = dueDate;
+    }
+    if (notes.trim()) {
+      payload.notes = notes.trim();
+    }
+    return payload;
+  }, [amount, businessName, client, clientType, dueDate, hasDraftDetails, notes]);
+
+  const draftMetadata = useMemo(() => {
+    if (!hasDraftDetails) {
+      return null;
+    }
+    return {
+      client_name: client.trim() || "New reminder",
+      amount_display: amount.trim() || null,
+      status: "Draft details",
+      next_action: "Add delivery settings to continue.",
+    };
+  }, [amount, client, hasDraftDetails]);
+
+  const { ensureDraftSaved } = useReminderDraftPersistor({
+    token: session?.accessToken ?? null,
+    draftId,
+    onDraftId: setDraftId,
+    params: draftParams,
+    metadata: draftMetadata ?? undefined,
+    lastStep: "details",
+    lastPath: "/(tabs)/new-reminder",
+    enabled: Boolean(session?.accessToken) && hasDraftDetails,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +151,7 @@ export default function NewReminderScreen() {
     async (savedClient: Client, method: ContactMethod, platform: string) => {
       const contactSummary = getContactSummary(method);
       await Haptics.selectionAsync();
+      const savedDraftId = await ensureDraftSaved();
       router.push({
         pathname: "/new-reminder/send-options",
         params: {
@@ -110,10 +172,11 @@ export default function NewReminderScreen() {
           slackUserId: method.slack_user_id ?? "",
           telegramChatId: method.telegram_chat_id ?? "",
           telegramUsername: method.telegram_username ?? "",
+          ...(savedDraftId ? { draftId: savedDraftId } : {}),
         },
       });
     },
-    [amount, dueDate, notes, router],
+    [amount, dueDate, ensureDraftSaved, notes, router],
   );
 
   const handleUseSavedClient = useCallback(
@@ -137,11 +200,35 @@ export default function NewReminderScreen() {
     [amount, missingQuickPickFields.length, proceedToSendOptions],
   );
 
+  const filteredSavedClients = useMemo(() => {
+    if (!savedClientSearch.trim()) return savedClients;
+    const query = savedClientSearch.trim().toLowerCase();
+    return savedClients.filter((entry) => {
+      const baseFields = [entry.name, entry.company_name ?? ""];
+      const contactFields = entry.contact_methods?.map((method) => {
+        const summary = getContactSummary(method);
+        return `${method.label ?? ""} ${summary}`;
+      });
+      const allFields = [...baseFields, ...(contactFields ?? [])];
+      return allFields.some((value) => value?.toLowerCase().includes(query));
+    });
+  }, [savedClientSearch, savedClients]);
+
+  const savedClientsHint = savedClientSearch.trim()
+    ? filteredSavedClients.length
+      ? `Showing ${filteredSavedClients.length} ${filteredSavedClients.length === 1 ? "match" : "matches"}.`
+      : `No clients match “${savedClientSearch.trim()}”.`
+    : "Tap any card to reuse its contact details.";
+
   const reopenQuickModalIfNeeded = () => {
     if (reopenQuickModalAfterPicker) {
       setQuickPickModalVisible(true);
       setReopenQuickModalAfterPicker(false);
     }
+  };
+
+  const handleReturnToReminders = () => {
+    router.replace("/reminders");
   };
 
   const openDueDatePicker = (options?: { reopenQuick?: boolean }) => {
@@ -198,6 +285,14 @@ export default function NewReminderScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {draftId ? (
+          <View style={styles.draftNavRow}>
+            <Pressable style={styles.draftNavButton} onPress={handleReturnToReminders}>
+              <Feather name="arrow-left" size={18} color={Theme.palette.slate} />
+              <Text style={styles.draftNavText}>Back to reminders</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.typeToggleBlock}>
           <View style={styles.typeTogglePill}>
             {CLIENT_TYPES.map((type) => {
@@ -297,6 +392,7 @@ export default function NewReminderScreen() {
             }
             setScheduleError(null);
             await Haptics.selectionAsync();
+            const savedDraftId = await ensureDraftSaved();
             router.push({
               pathname: "/new-reminder/contact-platform",
               params: {
@@ -306,6 +402,7 @@ export default function NewReminderScreen() {
                 amount: amount.trim(),
                 notes: notes.trim(),
                 ...(dueDate ? { dueDate } : {}),
+                ...(savedDraftId ? { draftId: savedDraftId } : {}),
               },
             });
           }}
@@ -315,88 +412,56 @@ export default function NewReminderScreen() {
         </Pressable>
         {scheduleError ? <Text style={styles.errorText}>{scheduleError}</Text> : null}
 
-        {renderSavedClients({
-          clients: savedClients,
-          loading: clientsLoading,
-          error: clientsError,
-          onSelect: handleUseSavedClient,
-        })}
+        <SavedClientsSection
+          clients={filteredSavedClients}
+          loading={clientsLoading}
+          error={clientsError}
+          onSelect={handleUseSavedClient}
+          limit={savedClientSearch.trim() ? undefined : 4}
+          hint={savedClientsHint}
+          showWhenEmpty={Boolean(savedClientSearch.trim())}
+          emptyText={`No clients match “${savedClientSearch.trim()}”.`}
+          showSearch={savedClients.length > 4}
+          searchValue={savedClientSearch}
+          onChangeSearch={setSavedClientSearch}
+          searchPlaceholder="Search saved clients"
+        />
       </ScrollView>
-      <Modal transparent visible={quickPickModalVisible} animationType="fade">
-        <View style={styles.quickModalOverlay}>
-          <View style={styles.quickModalCard}>
-            <Text style={styles.quickModalTitle}>Missing details</Text>
-            <Text style={styles.quickModalSubtitle}>
-              {missingQuickPickFields.join(" and ")} {missingQuickPickFields.length > 1 ? "are" : "is"} empty. Add them here or skip.
-            </Text>
-            <View style={styles.quickFieldGroup}>
-              <Text style={styles.fieldLabel}>Due date</Text>
-              <Pressable
-                style={styles.dateButton}
-                onPress={() => openDueDatePicker({ reopenQuick: true })}
-              >
-                <View style={styles.dateButtonContent}>
-                  <Feather name="calendar" size={18} color={Theme.palette.slate} />
-                  <Text style={[styles.dateButtonText, !dueDate && styles.dateButtonPlaceholder]}>
-                    {dueDate ? formatDueDateLabel(dueDate) : "Add a due date"}
-                  </Text>
-                </View>
-              </Pressable>
-            </View>
-            <View style={styles.quickFieldGroup}>
-              <Text style={styles.fieldLabel}>Client notes</Text>
-              <TextInput
-                style={styles.textArea}
-                placeholder="Add context, project references, or preferences."
-                placeholderTextColor={Theme.palette.slateSoft}
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-            </View>
-            <View style={styles.quickActions}>
-              <Pressable
-                style={styles.quickActionMuted}
-                onPress={() => {
-                  setReopenQuickModalAfterPicker(false);
-                  if (quickPickPending) {
-                    const platform = resolvePlatformFromMethod(quickPickPending.method.type);
-                    if (!platform) {
-                      Alert.alert("Unsupported contact", "This contact type cannot be used yet.");
-                      return;
-                    }
-                    proceedToSendOptions(quickPickPending.client, quickPickPending.method, platform);
-                  }
-                  setQuickPickModalVisible(false);
-                  setQuickPickPending(null);
-                }}
-              >
-                <Text style={styles.quickActionMutedText}>Skip</Text>
-              </Pressable>
-              <Pressable
-                style={styles.quickActionPrimary}
-                onPress={() => {
-                  setReopenQuickModalAfterPicker(false);
-                  if (quickPickPending) {
-                    const platform = resolvePlatformFromMethod(quickPickPending.method.type);
-                    if (!platform) {
-                      Alert.alert("Unsupported contact", "This contact type cannot be used yet.");
-                      return;
-                    }
-                    proceedToSendOptions(quickPickPending.client, quickPickPending.method, platform);
-                  }
-                  setQuickPickModalVisible(false);
-                  setQuickPickPending(null);
-                }}
-              >
-                <Text style={styles.quickActionPrimaryText}>Save & continue</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <MissingDetailsModal
+        visible={quickPickModalVisible}
+        missingFields={missingQuickPickFields}
+        dueDateLabel={dueDate ? formatDueDateLabel(dueDate) : "Add a due date"}
+        hasDueDate={Boolean(dueDate)}
+        onPressDueDate={() => openDueDatePicker({ reopenQuick: true })}
+        notesValue={notes}
+        onChangeNotes={setNotes}
+        onSkip={async () => {
+          setReopenQuickModalAfterPicker(false);
+          if (quickPickPending) {
+            const platform = resolvePlatformFromMethod(quickPickPending.method.type);
+            if (!platform) {
+              Alert.alert("Unsupported contact", "This contact type cannot be used yet.");
+              return;
+            }
+            await proceedToSendOptions(quickPickPending.client, quickPickPending.method, platform);
+          }
+          setQuickPickModalVisible(false);
+          setQuickPickPending(null);
+        }}
+        onSave={async () => {
+          setReopenQuickModalAfterPicker(false);
+          if (quickPickPending) {
+            const platform = resolvePlatformFromMethod(quickPickPending.method.type);
+            if (!platform) {
+              Alert.alert("Unsupported contact", "This contact type cannot be used yet.");
+              return;
+            }
+            await proceedToSendOptions(quickPickPending.client, quickPickPending.method, platform);
+          }
+          setQuickPickModalVisible(false);
+          setQuickPickPending(null);
+        }}
+      />
       {Platform.OS === "ios" && iosDatePickerVisible ? (
         <Modal animationType="fade" transparent visible>
           <View style={styles.pickerOverlay}>
@@ -427,7 +492,33 @@ export default function NewReminderScreen() {
   );
 }
 
+function normalizeParams(params: Record<string, string | string[]>) {
+  const result: Record<string, string> = {};
+  Object.entries(params).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      result[key] = value[0] ?? "";
+    } else if (typeof value === "string") {
+      result[key] = value;
+    }
+  });
+  return result;
+}
+
 const styles = StyleSheet.create({
+  draftNavRow: {
+    flexDirection: "row",
+    justifyContent: "flex-start",
+  },
+  draftNavButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    paddingBottom: Theme.spacing.sm,
+  },
+  draftNavText: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
   safe: {
     flex: 1,
     backgroundColor: Theme.palette.background,
@@ -607,252 +698,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.palette.accent,
   },
-  savedSection: {
-    gap: Theme.spacing.sm,
-  },
-  savedClientsTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: Theme.palette.ink,
-  },
-  savedClientsHint: {
-    fontSize: 13,
-    color: Theme.palette.slate,
-  },
-  savedClientsBadge: {
-    fontSize: 12,
-    color: Theme.palette.slateSoft,
-  },
-  savedClientsList: {
-    gap: Theme.spacing.sm,
-  },
-  savedClientCard: {
-    borderWidth: 1,
-    borderColor: Theme.palette.border,
-    borderRadius: Theme.radii.lg,
-    padding: Theme.spacing.lg,
-    backgroundColor: "#FFFFFF",
-    gap: Theme.spacing.sm,
-  },
-  savedClientHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  savedClientName: {
-    fontSize: 16,
-    fontWeight: "500",
-    color: Theme.palette.ink,
-  },
-  savedClientMeta: {
-    fontSize: 14,
-    color: Theme.palette.slate,
-  },
-  contactRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: Theme.spacing.md,
-    borderWidth: 1,
-    borderColor: Theme.palette.border,
-    borderRadius: Theme.radii.md,
-    backgroundColor: Theme.palette.surface,
-    marginTop: Theme.spacing.xs,
-  },
-  contactRowInfo: {
-    flex: 1,
-    gap: 2,
-  },
-  contactLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: Theme.palette.ink,
-  },
-  contactDetail: {
-    fontSize: 12,
-    color: Theme.palette.slate,
-  },
-  savedClientsError: {
-    fontSize: 13,
-    color: Theme.palette.accent,
-  },
-  quickModalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: Theme.spacing.lg,
-  },
-  quickModalCard: {
-    width: "100%",
-    maxWidth: 420,
-    borderRadius: Theme.radii.lg,
-    backgroundColor: "#FFFFFF",
-    padding: Theme.spacing.lg,
-    gap: Theme.spacing.md,
-  },
-  quickModalTitle: {
-    fontSize: 20,
-    fontWeight: "600",
-    color: Theme.palette.ink,
-  },
-  quickModalSubtitle: {
-    fontSize: 14,
-    color: Theme.palette.slate,
-    lineHeight: 20,
-  },
-  quickFieldGroup: {
-    gap: Theme.spacing.xs,
-  },
-  quickActions: {
-    flexDirection: "row",
-    gap: Theme.spacing.sm,
-  },
-  quickActionMuted: {
-    flex: 1,
-    paddingVertical: Theme.spacing.md,
-    borderWidth: 1,
-    borderColor: Theme.palette.border,
-    borderRadius: Theme.radii.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quickActionMutedText: {
-    fontSize: 15,
-    color: Theme.palette.slate,
-  },
-  quickActionPrimary: {
-    flex: 1,
-    paddingVertical: Theme.spacing.md,
-    borderRadius: Theme.radii.md,
-    backgroundColor: Theme.palette.slate,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quickActionPrimaryText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFFFFF",
-  },
 });
-
-function parseISOToDate(value: string) {
-  const [year, month, day] = value.split("-").map((part) => Number(part) || 0);
-  return new Date(year, month - 1, day || 1);
-}
-
-function formatISODate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function formatDueDateLabel(value: string) {
-  if (!value) return "Add a due date";
-  const date = parseISOToDate(value);
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function renderSavedClients({
-  clients,
-  loading,
-  error,
-  onSelect,
-}: {
-  clients: Client[];
-  loading: boolean;
-  error: string | null;
-  onSelect: (client: Client, method: ContactMethod) => void;
-}) {
-  if ((!clients.length && !loading && !error) || !onSelect) {
-    return null;
-  }
-  return (
-    <View style={styles.savedSection}>
-      <View style={styles.savedClientHeader}>
-        <Text style={styles.savedClientsTitle}>Use an existing client</Text>
-        {loading ? <Text style={styles.savedClientsBadge}>Loading…</Text> : null}
-      </View>
-      <Text style={styles.savedClientsHint}>Tap any card to reuse its contact details.</Text>
-      {error ? <Text style={styles.savedClientsError}>{error}</Text> : null}
-      <View style={styles.savedClientsList}>
-        {!loading && !error
-          ? clients.slice(0, 4).map((client) => (
-              <View key={client.id} style={styles.savedClientCard}>
-                <View style={styles.savedClientHeader}>
-                  <View>
-                    <Text style={styles.savedClientName}>{client.name}</Text>
-                    {client.company_name ? (
-                      <Text style={styles.savedClientMeta}>{client.company_name}</Text>
-                    ) : null}
-                  </View>
-                  <Text style={styles.savedClientsBadge}>{client.contact_methods?.length ?? 0} contacts</Text>
-                </View>
-                {client.contact_methods?.length ? (
-                  client.contact_methods.slice(0, 3).map((method) => (
-                    <Pressable
-                      key={method.id}
-                      style={styles.contactRow}
-                      onPress={() => onSelect(client, method)}
-                    >
-                      <View style={styles.contactRowInfo}>
-                        <Text style={styles.contactLabel}>{method.label || formatMethodLabel(method)}</Text>
-                        <Text style={styles.contactDetail}>{getContactSummary(method)}</Text>
-                      </View>
-                      <Feather name="chevron-right" size={18} color={Theme.palette.slate} />
-                    </Pressable>
-                  ))
-                ) : (
-                  <Text style={styles.savedClientMeta}>No contact methods yet.</Text>
-                )}
-              </View>
-            ))
-          : null}
-      </View>
-    </View>
-  );
-}
-
-function formatMethodLabel(method: ContactMethod) {
-  switch (method.type) {
-    case "email":
-      return "Email";
-    case "email_gmail":
-      return "Gmail";
-    case "email_outlook":
-      return "Outlook";
-    case "whatsapp":
-      return "WhatsApp";
-    case "telegram":
-      return "Telegram";
-    case "slack":
-      return "Slack";
-    default:
-      return "Contact";
-  }
-}
-
-function resolvePlatformFromMethod(type: ContactMethod["type"]) {
-  switch (type) {
-    case "email":
-    case "email_gmail":
-      return "gmail";
-    case "email_outlook":
-      return "outlook";
-    case "whatsapp":
-      return "whatsapp";
-    case "telegram":
-      return "telegram";
-    case "slack":
-      return "slack";
-    default:
-      return null;
-  }
-}
-
-function getContactSummary(method: ContactMethod) {
-  if (method.email) return method.email;
-  if (method.phone) return method.phone;
-  if (method.telegram_username) return method.telegram_username;
-  if (method.telegram_chat_id) return method.telegram_chat_id;
-  if (method.slack_user_id) return `Slack ${method.slack_user_id}`;
-  return method.label ?? "Contact";
-}

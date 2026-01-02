@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +21,7 @@ import type { ReminderDraft } from "@/types/reminder-drafts";
 import type { UpcomingReminder } from "@/types/reminders";
 
 const UPCOMING_REMINDERS_CACHE_KEY = "cache.reminders.upcoming";
+const REMINDER_DRAFTS_CACHE_KEY = "cache.reminders.drafts";
 const UPCOMING_LIMIT = 3;
 
 export default function RemindersScreen() {
@@ -31,15 +33,22 @@ export default function RemindersScreen() {
   const [drafts, setDrafts] = useState<ReminderDraft[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [draftsError, setDraftsError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      const cached = await getCachedValue<UpcomingReminder[]>(
-        UPCOMING_REMINDERS_CACHE_KEY
-      );
-      if (!cancelled && cached) {
-        setUpcoming(cached);
+      const [cachedUpcoming, cachedDrafts] = await Promise.all([
+        getCachedValue<UpcomingReminder[]>(UPCOMING_REMINDERS_CACHE_KEY),
+        getCachedValue<ReminderDraft[]>(REMINDER_DRAFTS_CACHE_KEY),
+      ]);
+      if (!cancelled) {
+        if (cachedUpcoming?.length) {
+          setUpcoming(cachedUpcoming);
+        }
+        if (cachedDrafts?.length) {
+          setDrafts(cachedDrafts);
+        }
       }
     };
     hydrate();
@@ -48,14 +57,17 @@ export default function RemindersScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    const loadUpcoming = async () => {
+  const loadUpcoming = useCallback(
+    async (options?: { showSpinner?: boolean }) => {
+      const showSpinner = options?.showSpinner ?? true;
       if (!session?.accessToken) {
         setError("Sign in to view upcoming reminders.");
         setUpcoming([]);
         return;
       }
-      setLoadingUpcoming(true);
+      if (showSpinner) {
+        setLoadingUpcoming(true);
+      }
       setError(null);
       try {
         const response = await fetchUpcomingReminders(session.accessToken, {
@@ -70,49 +82,52 @@ export default function RemindersScreen() {
             : "Unable to load upcoming reminders right now."
         );
       } finally {
-        setLoadingUpcoming(false);
+        if (showSpinner) {
+          setLoadingUpcoming(false);
+        }
       }
-    };
+    },
+    [session?.accessToken],
+  );
+
+  useEffect(() => {
     loadUpcoming();
-  }, [session?.accessToken]);
+  }, [loadUpcoming]);
+
+  const loadDrafts = useCallback(
+    async (options?: { showSpinner?: boolean }) => {
+      const showSpinner = options?.showSpinner ?? true;
+      if (!session?.accessToken) {
+        setDrafts([]);
+        setDraftsError("Sign in to see your reminder drafts.");
+        return;
+      }
+      if (showSpinner) {
+        setDraftsLoading(true);
+      }
+      setDraftsError(null);
+      try {
+        const response = await fetchReminderDrafts(session.accessToken);
+        setDrafts(response);
+        await setCachedValue(REMINDER_DRAFTS_CACHE_KEY, response);
+      } catch (err) {
+        setDrafts([]);
+        setDraftsError(
+          err instanceof Error ? err.message : "Unable to load drafts right now.",
+        );
+      } finally {
+        if (showSpinner) {
+          setDraftsLoading(false);
+        }
+      }
+    },
+    [session?.accessToken],
+  );
 
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-      const loadDrafts = async () => {
-        if (!session?.accessToken) {
-          if (!cancelled) {
-            setDrafts([]);
-            setDraftsError("Sign in to see your reminder drafts.");
-            setDraftsLoading(false);
-          }
-          return;
-        }
-        setDraftsLoading(true);
-        setDraftsError(null);
-        try {
-          const response = await fetchReminderDrafts(session.accessToken);
-          if (!cancelled) {
-            setDrafts(response);
-          }
-        } catch (err) {
-          if (!cancelled) {
-            setDrafts([]);
-            setDraftsError(
-              err instanceof Error ? err.message : "Unable to load drafts right now.",
-            );
-          }
-        } finally {
-          if (!cancelled) {
-            setDraftsLoading(false);
-          }
-        }
-      };
       loadDrafts();
-      return () => {
-        cancelled = true;
-      };
-    }, [session?.accessToken]),
+    }, [loadDrafts]),
   );
 
   const upcomingCards = useMemo(() => {
@@ -122,6 +137,7 @@ export default function RemindersScreen() {
         id: item.id,
         client: item.client_name,
         amount,
+        currency: item.invoice_currency,
         status: formatReminderStatus(item),
         nextAction: formatNextAction(item.scheduled_for),
         schedule: formatScheduleSummary(item.invoice_schedule),
@@ -168,9 +184,23 @@ export default function RemindersScreen() {
     [router],
   );
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([
+      loadUpcoming({ showSpinner: false }),
+      loadDrafts({ showSpinner: false }),
+    ]);
+    setRefreshing(false);
+  }, [loadUpcoming, loadDrafts]);
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Theme.palette.ink} />
+        }
+      >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Upcoming</Text>
           <View style={styles.list}>
@@ -194,6 +224,7 @@ export default function RemindersScreen() {
                         id: item.id,
                         client: item.client,
                         amount: item.amount,
+                        currency: item.currency,
                         status: item.status,
                         nextAction: item.nextAction,
                         schedule: item.schedule,

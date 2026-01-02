@@ -4,11 +4,13 @@ import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   GestureResponderEvent,
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,19 +25,32 @@ import { SavedClientsSection } from "@/components/new-reminder/SavedClientsSecti
 import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
 import { getContactSummary, resolvePlatformFromMethod } from "@/lib/contact-methods";
 import { formatDueDateLabel, formatISODate, parseISOToDate } from "@/lib/date";
+import { getCachedValue, setCachedValue } from "@/lib/cache";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClients } from "@/services/clients";
+import { fetchCurrencies } from "@/services/currencies";
 import type { Client, ContactMethod } from "@/types/clients";
+import type { Currency } from "@/types/currency";
 
 const CLIENT_TYPES = ["business", "individual"] as const;
 const clientTypeLabels: Record<(typeof CLIENT_TYPES)[number], string> = {
   business: "Business",
   individual: "Individual",
 };
+const CURRENCY_CACHE_KEY = "cache.settings.currencies";
+const SAVED_CLIENTS_CACHE_KEY = "cache.savedClients";
+
+const normalizeCurrencyList = (list: Currency[]) =>
+  list
+    .map((currency) => ({
+      ...currency,
+      code: currency.code.toUpperCase(),
+    }))
+    .sort((a, b) => a.code.localeCompare(b.code));
 
 export default function NewReminderScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
   const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
   const [draftId, setDraftId] = useState<string | null>(persistedParams.draftId ?? null);
@@ -44,6 +59,8 @@ export default function NewReminderScreen() {
   const [client, setClient] = useState(persistedParams.client ?? "");
   const [clientType, setClientType] = useState<(typeof CLIENT_TYPES)[number]>(initialClientType);
   const [businessName, setBusinessName] = useState(persistedParams.businessName ?? "");
+  const initialCurrency = (persistedParams.currency ?? user?.default_currency ?? "USD").toUpperCase();
+  const [currency, setCurrency] = useState(initialCurrency);
   const [amount, setAmount] = useState(persistedParams.amount ?? "");
   const [dueDate, setDueDate] = useState(persistedParams.dueDate ?? "");
   const [notes, setNotes] = useState(persistedParams.notes ?? "");
@@ -54,6 +71,12 @@ export default function NewReminderScreen() {
   const [savedClients, setSavedClients] = useState<Client[]>([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [clientsError, setClientsError] = useState<string | null>(null);
+  const [clientsRefreshing, setClientsRefreshing] = useState(false);
+  const [currencyPickerVisible, setCurrencyPickerVisible] = useState(false);
+  const [currencyOptions, setCurrencyOptions] = useState<Currency[]>([]);
+  const [currencyLoading, setCurrencyLoading] = useState(false);
+  const [currencyError, setCurrencyError] = useState<string | null>(null);
+  const [currencySearch, setCurrencySearch] = useState("");
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [quickPickPending, setQuickPickPending] = useState<{ client: Client; method: ContactMethod } | null>(null);
   const [quickPickModalVisible, setQuickPickModalVisible] = useState(false);
@@ -68,7 +91,11 @@ export default function NewReminderScreen() {
   const [savedClientSearch, setSavedClientSearch] = useState("");
 
   const hasDraftDetails =
-    Boolean(client.trim()) || Boolean(businessName.trim()) || Boolean(amount.trim()) || Boolean(dueDate) || Boolean(notes.trim());
+    Boolean(client.trim()) ||
+    Boolean(businessName.trim()) ||
+    Boolean(amount.trim()) ||
+    Boolean(dueDate) ||
+    Boolean(notes.trim());
 
   const draftParams = useMemo(() => {
     if (!hasDraftDetails) {
@@ -82,6 +109,9 @@ export default function NewReminderScreen() {
     }
     if (amount.trim()) {
       payload.amount = amount.trim();
+    }
+    if (currency) {
+      payload.currency = currency;
     }
     if (dueDate) {
       payload.dueDate = dueDate;
@@ -98,7 +128,7 @@ export default function NewReminderScreen() {
     }
     return {
       client_name: client.trim() || "New reminder",
-      amount_display: amount.trim() || null,
+      amount_display: amount.trim() ? `${currency} ${amount.trim()}` : null,
       status: "Draft details",
       next_action: "Add delivery settings to continue.",
     };
@@ -117,35 +147,80 @@ export default function NewReminderScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    const loadClients = async () => {
-      if (!session?.accessToken) {
-        setSavedClients([]);
-        setClientsError(null);
-        return;
-      }
-      setClientsLoading(true);
-      setClientsError(null);
-      try {
-        const response = await fetchClients(session.accessToken);
-        if (!cancelled) {
-          setSavedClients(response);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setClientsError(err instanceof Error ? err.message : "Unable to load clients right now.");
-          setSavedClients([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setClientsLoading(false);
-        }
+    const hydrate = async () => {
+      const cached = await getCachedValue<Client[]>(SAVED_CLIENTS_CACHE_KEY);
+      if (!cancelled && cached?.length) {
+        setSavedClients(cached);
       }
     };
-    loadClients();
+    hydrate();
     return () => {
       cancelled = true;
     };
-  }, [session?.accessToken]);
+  }, []);
+
+  const loadSavedClients = useCallback(
+    async (options?: { showSpinner?: boolean }) => {
+      const showSpinner = options?.showSpinner ?? true;
+      if (!session?.accessToken) {
+        setSavedClients([]);
+        setClientsError("Sign in to view saved clients.");
+        return;
+      }
+      if (showSpinner) {
+        setClientsLoading(true);
+      }
+      setClientsError(null);
+      try {
+        const response = await fetchClients(session.accessToken);
+        setSavedClients(response);
+        await setCachedValue(SAVED_CLIENTS_CACHE_KEY, response);
+      } catch (err) {
+        setClientsError(err instanceof Error ? err.message : "Unable to load clients right now.");
+        setSavedClients([]);
+      } finally {
+        if (showSpinner) {
+          setClientsLoading(false);
+        }
+      }
+    },
+    [session?.accessToken],
+  );
+
+  useEffect(() => {
+    loadSavedClients();
+  }, [loadSavedClients]);
+
+  const loadCurrencyOptions = useCallback(async () => {
+    setCurrencyError(null);
+    setCurrencyLoading(true);
+    try {
+      const cached = await getCachedValue<Currency[]>(CURRENCY_CACHE_KEY);
+      if (cached?.length) {
+        setCurrencyOptions(normalizeCurrencyList(cached));
+      }
+      const response = await fetchCurrencies({ limit: 500 });
+      const normalized = normalizeCurrencyList(response);
+      setCurrencyOptions(normalized);
+      await setCachedValue(CURRENCY_CACHE_KEY, normalized);
+    } catch (err) {
+      setCurrencyError(err instanceof Error ? err.message : "Unable to load currencies.");
+    } finally {
+      setCurrencyLoading(false);
+    }
+  }, []);
+
+  const filteredCurrencyOptions = useMemo(() => {
+    const query = currencySearch.trim().toLowerCase();
+    if (!query) {
+      return currencyOptions;
+    }
+    return currencyOptions.filter(
+      (entry) =>
+        entry.code.toLowerCase().includes(query) ||
+        entry.name.toLowerCase().includes(query)
+    );
+  }, [currencyOptions, currencySearch]);
 
   const proceedToSendOptions = useCallback(
     async (savedClient: Client, method: ContactMethod, platform: string) => {
@@ -159,6 +234,7 @@ export default function NewReminderScreen() {
           clientType: savedClient.client_type,
           businessName: savedClient.company_name ?? "",
           amount: amount.trim(),
+          currency,
           dueDate,
           notes: notes.trim(),
           platform,
@@ -176,7 +252,7 @@ export default function NewReminderScreen() {
         },
       });
     },
-    [amount, dueDate, ensureDraftSaved, notes, router],
+    [amount, currency, dueDate, ensureDraftSaved, notes, router],
   );
 
   const handleUseSavedClient = useCallback(
@@ -200,6 +276,24 @@ export default function NewReminderScreen() {
     [amount, missingQuickPickFields.length, proceedToSendOptions],
   );
 
+  const openCurrencyPicker = () => {
+    setCurrencyPickerVisible(true);
+    if (!currencyOptions.length && !currencyLoading) {
+      void loadCurrencyOptions();
+    }
+  };
+
+  const closeCurrencyPicker = () => {
+    setCurrencyPickerVisible(false);
+    setCurrencySearch("");
+    setCurrencyError(null);
+  };
+
+  const handleCurrencyPick = (code: string) => {
+    setCurrency(code);
+    closeCurrencyPicker();
+  };
+
   const filteredSavedClients = useMemo(() => {
     if (!savedClientSearch.trim()) return savedClients;
     const query = savedClientSearch.trim().toLowerCase();
@@ -213,6 +307,12 @@ export default function NewReminderScreen() {
       return allFields.some((value) => value?.toLowerCase().includes(query));
     });
   }, [savedClientSearch, savedClients]);
+
+  const handleRefresh = useCallback(async () => {
+    setClientsRefreshing(true);
+    await loadSavedClients({ showSpinner: false });
+    setClientsRefreshing(false);
+  }, [loadSavedClients]);
 
   const savedClientsHint = savedClientSearch.trim()
     ? filteredSavedClients.length
@@ -284,7 +384,17 @@ export default function NewReminderScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={clientsRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={Theme.palette.ink}
+          />
+        }
+      >
         {draftId ? (
           <View style={styles.draftNavRow}>
             <Pressable style={styles.draftNavButton} onPress={handleReturnToReminders}>
@@ -334,14 +444,20 @@ export default function NewReminderScreen() {
             </>
           ) : null}
           <Text style={styles.label}>Amount owed</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="$4,200"
-            keyboardType="decimal-pad"
-            placeholderTextColor={Theme.palette.slateSoft}
-            value={amount}
-            onChangeText={setAmount}
-          />
+          <View style={styles.amountRow}>
+            <Pressable style={styles.currencyButton} onPress={openCurrencyPicker}>
+              <Text style={styles.currencyButtonText}>{currency}</Text>
+              <Feather name="chevron-down" size={14} color={Theme.palette.slate} />
+            </Pressable>
+            <TextInput
+              style={styles.amountInput}
+              placeholder="4,200"
+              keyboardType="decimal-pad"
+              placeholderTextColor={Theme.palette.slateSoft}
+              value={amount}
+              onChangeText={setAmount}
+            />
+          </View>
           <View style={styles.dueDateHeader}>
             <Text style={styles.label}>Due date</Text>
             <Text style={styles.optional}>Optional</Text>
@@ -400,6 +516,7 @@ export default function NewReminderScreen() {
                 clientType,
                 businessName: clientType === "business" ? businessName.trim() : "",
                 amount: amount.trim(),
+                currency,
                 notes: notes.trim(),
                 ...(dueDate ? { dueDate } : {}),
                 ...(savedDraftId ? { draftId: savedDraftId } : {}),
@@ -427,6 +544,65 @@ export default function NewReminderScreen() {
           searchPlaceholder="Search saved clients"
         />
       </ScrollView>
+      <Modal
+        transparent
+        visible={currencyPickerVisible}
+        animationType="fade"
+        onRequestClose={closeCurrencyPicker}
+      >
+        <View style={styles.currencyOverlay}>
+          <View style={styles.currencyModal}>
+            <View style={styles.currencyModalHeader}>
+              <Text style={styles.currencyModalTitle}>Select currency</Text>
+              <Pressable onPress={closeCurrencyPicker}>
+                <Feather name="x" size={18} color={Theme.palette.slate} />
+              </Pressable>
+            </View>
+            <View style={styles.currencySearchField}>
+              <Feather name="search" size={16} color={Theme.palette.slate} />
+              <TextInput
+                style={styles.currencySearchInput}
+                placeholder="Search code or name"
+                placeholderTextColor={Theme.palette.slateSoft}
+                value={currencySearch}
+                onChangeText={setCurrencySearch}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+            </View>
+            {currencyError ? <Text style={styles.currencyError}>{currencyError}</Text> : null}
+            {currencyLoading && !currencyOptions.length ? (
+              <View style={styles.currencyLoading}>
+                <ActivityIndicator color={Theme.palette.ink} />
+              </View>
+            ) : (
+              <ScrollView style={styles.currencyList} keyboardShouldPersistTaps="handled">
+                {filteredCurrencyOptions.map((entry) => {
+                  const isActive = entry.code === currency;
+                  return (
+                    <Pressable
+                      key={entry.code}
+                      style={[styles.currencyOption, isActive && styles.currencyOptionActive]}
+                      onPress={() => handleCurrencyPick(entry.code)}
+                    >
+                      <View style={styles.currencyOptionText}>
+                        <Text style={styles.currencyOptionCode}>{entry.code}</Text>
+                        <Text style={styles.currencyOptionName}>{entry.name}</Text>
+                      </View>
+                      {isActive ? (
+                        <Feather name="check" size={16} color={Theme.palette.slate} />
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+                {!filteredCurrencyOptions.length && !currencyLoading ? (
+                  <Text style={styles.currencyEmptyText}>No currencies found.</Text>
+                ) : null}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
       <MissingDetailsModal
         visible={quickPickModalVisible}
         missingFields={missingQuickPickFields}
@@ -537,6 +713,27 @@ const styles = StyleSheet.create({
     gap: Theme.spacing.sm,
     backgroundColor: "#FFFFFF",
   },
+  amountRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+  },
+  currencyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    backgroundColor: Theme.palette.surface,
+  },
+  currencyButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
   label: {
     fontSize: 13,
     textTransform: "uppercase",
@@ -552,6 +749,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Theme.palette.ink,
     marginBottom: Theme.spacing.sm,
+  },
+  amountInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.md,
+    fontSize: 16,
+    color: Theme.palette.ink,
   },
   primaryButton: {
     flexDirection: "row",
@@ -697,5 +904,85 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 13,
     color: Theme.palette.accent,
+  },
+  currencyOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  currencyModal: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.sm,
+  },
+  currencyModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  currencyModalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  currencySearchField: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    backgroundColor: Theme.palette.surface,
+  },
+  currencySearchInput: {
+    flex: 1,
+    paddingVertical: Theme.spacing.sm,
+    color: Theme.palette.ink,
+  },
+  currencyError: {
+    fontSize: 13,
+    color: Theme.palette.accent,
+  },
+  currencyLoading: {
+    paddingVertical: Theme.spacing.lg,
+    alignItems: "center",
+  },
+  currencyList: {
+    maxHeight: 360,
+  },
+  currencyOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: Theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.palette.border,
+  },
+  currencyOptionActive: {
+    backgroundColor: Theme.palette.surface,
+  },
+  currencyOptionText: {
+    flex: 1,
+    gap: 2,
+  },
+  currencyOptionCode: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  currencyOptionName: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  currencyEmptyText: {
+    paddingVertical: Theme.spacing.sm,
+    textAlign: "center",
+    color: Theme.palette.slate,
   },
 });

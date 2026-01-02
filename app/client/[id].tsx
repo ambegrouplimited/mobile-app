@@ -1,8 +1,8 @@
 import { Feather } from "@expo/vector-icons";
 import { Asset } from "expo-asset";
 import { Image } from "expo-image";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -10,11 +10,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import BankBadge from "@/assets/iban.png";
+import ReminderSchedulePicker, { ReminderScheduleSelection } from "@/components/reminder-schedule-picker";
 import { Theme } from "@/constants/theme";
 import {
   clientProfiles,
@@ -24,15 +26,20 @@ import {
 } from "@/data/mock-clients";
 import { paymentLogos } from "@/data/payment-methods";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { schedulePayloadToSummary } from "@/lib/reminder-schedule";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClient } from "@/services/clients";
 import {
   fetchInvoices,
   markInvoicePaid,
   markInvoiceUnpaid,
+  pauseInvoice,
+  rescheduleInvoice as rescheduleInvoiceRequest,
+  resumeInvoice,
 } from "@/services/invoices";
+import { fetchTimezones, TimezoneInfo } from "@/services/timezones";
 import type { Client, ContactMethod } from "@/types/clients";
-import type { Invoice } from "@/types/invoices";
+import type { Invoice, ReminderScheduleMode, ReminderSchedulePayload } from "@/types/invoices";
 import type {
   PaymentMethodDetails,
   PaymentMethodType,
@@ -54,11 +61,12 @@ const CONTACT_LOGOS = {
 type PaymentLogoKey = keyof typeof paymentLogos;
 const CLIENT_CACHE_KEY = (id: string) => `cache.client.${id}`;
 const CLIENT_INVOICES_CACHE_KEY = (id: string) => `cache.client.${id}.invoices`;
+type InvoiceActionMode = "markPaid" | "markUnpaid" | "pause" | "resume";
 
 export default function ClientDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,10 +74,62 @@ export default function ClientDetailScreen() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [confirmAction, setConfirmAction] = useState<{
     invoice: Invoice;
-    mode: "markPaid" | "markUnpaid";
+    mode: InvoiceActionMode;
   } | null>(null);
   const [actionProcessing, setActionProcessing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<Invoice | null>(null);
+  const [rescheduleSelection, setRescheduleSelection] = useState<ReminderScheduleSelection | null>(null);
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+  const fallbackTimezone =
+    user?.default_timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  const [rescheduleTimezone, setRescheduleTimezone] = useState<string | null>(null);
+  const [timezonePickerVisible, setTimezonePickerVisible] = useState(false);
+  const [timezoneOptions, setTimezoneOptions] = useState<TimezoneInfo[]>([]);
+  const [timezoneSearch, setTimezoneSearch] = useState("");
+  const [timezoneListLoading, setTimezoneListLoading] = useState(false);
+  const handleRescheduleTimezoneSelect = useCallback((zone: string) => {
+    setRescheduleTimezone(zone);
+    setTimezonePickerVisible(false);
+  }, []);
+  useEffect(() => {
+    if (!timezonePickerVisible || timezoneOptions.length) {
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setTimezoneListLoading(true);
+      try {
+        const list = await fetchTimezones();
+        if (!cancelled) {
+          setTimezoneOptions(list);
+        }
+      } catch {
+        if (!cancelled) {
+          setTimezoneOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setTimezoneListLoading(false);
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [timezonePickerVisible, timezoneOptions.length]);
+  const filteredRescheduleTimezones = useMemo(() => {
+    const query = timezoneSearch.trim().toLowerCase();
+    if (!query) return timezoneOptions;
+    return timezoneOptions.filter(
+      (entry) =>
+        entry.name.toLowerCase().includes(query) ||
+        entry.label.toLowerCase().includes(query)
+    );
+  }, [timezoneOptions, timezoneSearch]);
+  const [infoModal, setInfoModal] = useState<{ title: string; message: string } | null>(null);
 
   const reminders = useMemo(() => {
     if (id && clientProfiles[id]?.reminders?.length) {
@@ -78,6 +138,16 @@ export default function ClientDetailScreen() {
     const firstProfile = Object.values(clientProfiles)[0];
     return firstProfile ? firstProfile.reminders : [];
   }, [id]);
+  const rescheduleDefaults = useMemo(() => {
+    if (!rescheduleTarget?.reminder_schedule) {
+      return null;
+    }
+    try {
+      return schedulePayloadToSummary(rescheduleTarget.reminder_schedule as ReminderSchedulePayload);
+    } catch {
+      return null;
+    }
+  }, [rescheduleTarget]);
 
   useEffect(() => {
     if (!id) return;
@@ -97,45 +167,53 @@ export default function ClientDetailScreen() {
     };
   }, [id]);
 
-  useEffect(() => {
-    const loadClient = async () => {
-      if (!id || !session?.accessToken) {
-        setClient(null);
-        setInvoices([]);
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      try {
-        const [clientResult, invoiceResult] = await Promise.all([
-          fetchClient(id, session.accessToken),
-          fetchInvoices(session.accessToken, { client_id: id }),
-        ]);
-        setClient(clientResult);
-        setInvoices(invoiceResult);
-        await Promise.all([
-          setCachedValue(CLIENT_CACHE_KEY(id), clientResult),
-          setCachedValue(CLIENT_INVOICES_CACHE_KEY(id), invoiceResult),
-        ]);
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load this client right now."
-        );
-        setClient(null);
-        setInvoices([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadClient();
+  const loadClient = useCallback(async () => {
+    if (!id || !session?.accessToken) {
+      setClient(null);
+      setInvoices([]);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const [clientResult, invoiceResult] = await Promise.all([
+        fetchClient(id, session.accessToken),
+        fetchInvoices(session.accessToken, { client_id: id }),
+      ]);
+      setClient(clientResult);
+      setInvoices(invoiceResult);
+      await Promise.all([
+        setCachedValue(CLIENT_CACHE_KEY(id), clientResult),
+        setCachedValue(CLIENT_INVOICES_CACHE_KEY(id), invoiceResult),
+      ]);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load this client right now."
+      );
+      setClient(null);
+      setInvoices([]);
+    } finally {
+      setLoading(false);
+    }
   }, [id, session?.accessToken]);
 
-  const requestInvoiceAction = (invoice: Invoice) => {
-    const mode = invoice.status === "paid" ? "markUnpaid" : "markPaid";
+  useEffect(() => {
+    loadClient();
+  }, [loadClient]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadClient();
+    }, [loadClient]),
+  );
+
+  const requestInvoiceAction = (invoice: Invoice, mode?: InvoiceActionMode) => {
+    const resolvedMode =
+      mode ?? (invoice.status === "paid" ? "markUnpaid" : "markPaid");
     setActionError(null);
-    setConfirmAction({ invoice, mode });
+    setConfirmAction({ invoice, mode: resolvedMode });
   };
 
   const handleInvoiceAction = async () => {
@@ -143,13 +221,35 @@ export default function ClientDetailScreen() {
     setActionProcessing(true);
     setActionError(null);
     try {
-      const updatedInvoice =
-        confirmAction.mode === "markPaid"
-          ? await markInvoicePaid(confirmAction.invoice.id, session.accessToken)
-          : await markInvoiceUnpaid(
-              confirmAction.invoice.id,
-              session.accessToken
-            );
+      let updatedInvoice: Invoice;
+      switch (confirmAction.mode) {
+        case "markPaid":
+          updatedInvoice = await markInvoicePaid(
+            confirmAction.invoice.id,
+            session.accessToken
+          );
+          break;
+        case "markUnpaid":
+          updatedInvoice = await markInvoiceUnpaid(
+            confirmAction.invoice.id,
+            session.accessToken
+          );
+          break;
+        case "pause":
+          updatedInvoice = await pauseInvoice(
+            confirmAction.invoice.id,
+            session.accessToken
+          );
+          break;
+        case "resume":
+          updatedInvoice = await resumeInvoice(
+            confirmAction.invoice.id,
+            session.accessToken
+          );
+          break;
+        default:
+          updatedInvoice = confirmAction.invoice;
+      }
       setInvoices((prev) => {
         const next = prev.map((item) =>
           item.id === updatedInvoice.id ? updatedInvoice : item
@@ -169,6 +269,67 @@ export default function ClientDetailScreen() {
     } finally {
       setActionProcessing(false);
     }
+  };
+
+  const openRescheduleModal = (invoice: Invoice) => {
+    setRescheduleTarget(invoice);
+    setRescheduleSelection(null);
+    setRescheduleError(null);
+    setRescheduleSaving(false);
+    const inheritedTimezone =
+      invoice.timezone ??
+      client?.timezone ??
+      fallbackTimezone;
+    setRescheduleTimezone(inheritedTimezone);
+  };
+
+  const closeRescheduleModal = () => {
+    setRescheduleTarget(null);
+    setRescheduleSelection(null);
+    setRescheduleError(null);
+    setRescheduleSaving(false);
+    setTimezonePickerVisible(false);
+    setTimezoneSearch("");
+  };
+
+  const handleRescheduleSubmit = async () => {
+    if (!rescheduleTarget || !session?.accessToken) {
+      setRescheduleError("Sign in again to reschedule this invoice.");
+      return;
+    }
+    if (!rescheduleSelection?.schedulePayload || !rescheduleSelection.canSubmit) {
+      setRescheduleError("Select at least one reminder before saving.");
+      return;
+    }
+    const timezoneValue = rescheduleTimezone ?? reminderTimezone;
+    setRescheduleSaving(true);
+    setRescheduleError(null);
+    try {
+      const updatedInvoice = await rescheduleInvoiceRequest(
+        rescheduleTarget.id,
+        rescheduleSelection.schedulePayload,
+        session.accessToken,
+        timezoneValue,
+      );
+      setInvoices((prev) => {
+        const next = prev.map((item) => (item.id === updatedInvoice.id ? updatedInvoice : item));
+        if (id) {
+          setCachedValue(CLIENT_INVOICES_CACHE_KEY(id), next);
+        }
+        return next;
+      });
+      closeRescheduleModal();
+    } catch (err) {
+      setRescheduleError(
+        err instanceof Error ? err.message : "Unable to reschedule this invoice right now.",
+      );
+    } finally {
+      setRescheduleSaving(false);
+    }
+  };
+
+  const showActionInfo = (title: string, message: string) => {
+    setInfoModal({ title, message });
   };
 
   if (!id) {
@@ -199,19 +360,9 @@ export default function ClientDetailScreen() {
     client.name && client.name.trim().length > 0
       ? client.name
       : "your client";
+  const reminderTimezone = client.timezone ?? fallbackTimezone;
   const confirmCopy = confirmAction
-    ? confirmAction.mode === "markPaid"
-      ? {
-          title: "Confirm payment",
-          message: `DueSoon will mark this invoice as paid, pause reminders, and notify ${clientFriendlyName} that you've confirmed their payment.`,
-          confirmLabel: "Confirm payment",
-        }
-      : {
-          title: "Mark as unpaid",
-          message:
-            "We’ll clear the paid timestamp, move this invoice back to collecting, and resume reminders based on its schedule.",
-          confirmLabel: "Mark unpaid",
-        }
+    ? buildConfirmCopy(confirmAction.mode, clientFriendlyName)
     : null;
 
   return (
@@ -256,6 +407,26 @@ export default function ClientDetailScreen() {
             label="Last updated"
             value={new Date(client.updated_at).toLocaleDateString()}
           />
+          <View style={styles.clientTimezoneRow}>
+            <View style={styles.clientTimezoneText}>
+              <Text style={styles.infoLabel}>Reminder timezone</Text>
+              <Text style={styles.infoValue}>{reminderTimezone}</Text>
+            </View>
+            {id ? (
+              <Pressable
+                style={styles.clientTimezoneButton}
+                onPress={() =>
+                  router.push({
+                    pathname: "/client/[id]/timezone",
+                    params: { id },
+                  })
+                }
+              >
+                <Feather name="edit-3" size={14} color="#FFFFFF" />
+                <Text style={styles.clientTimezoneButtonLabel}>Change</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         <View style={styles.card}>
@@ -267,6 +438,17 @@ export default function ClientDetailScreen() {
           ) : (
             invoices.map((invoice) => {
               const isPaid = invoice.status === "paid";
+              const isPaused = invoice.status === "paused";
+              const canPauseResume = invoice.status !== "paid" && invoice.status !== "overdue";
+              const canReschedule = invoice.status === "overdue";
+              const confirmInfoCopy = isPaid
+                ? "Switch this back to collecting and restart reminders."
+                : `DueSoon emails ${clientFriendlyName} right after you confirm payment.`;
+              const pauseInfoCopy = isPaused
+                ? "Resume this schedule when the client is ready to continue."
+                : "Pause this invoice to temporarily stop reminders without marking it paid.";
+              const rescheduleInfoCopy =
+                "Overdue means there are no reminders left. Reschedule to queue a fresh follow-up plan.";
               return (
                 <View key={invoice.id} style={styles.reminderBlock}>
                   <View style={styles.reminderHeader}>
@@ -287,6 +469,10 @@ export default function ClientDetailScreen() {
                   <InfoRow
                     label="Delivery channel"
                     value={formatSendVia(invoice.send_via)}
+                  />
+                  <InfoRow
+                    label="Reminder timezone"
+                    value={invoice.timezone ?? reminderTimezone}
                   />
                   {invoice.reminder_schedule ? (
                     <ScheduleDetails
@@ -314,27 +500,128 @@ export default function ClientDetailScreen() {
                       ]}
                       onPress={() => requestInvoiceAction(invoice)}
                     >
-                      <Feather
-                        name={isPaid ? "rotate-ccw" : "check-circle"}
-                        size={16}
-                        color={isPaid ? Theme.palette.ink : "#FFFFFF"}
-                      />
-                      <Text
-                        style={[
-                          styles.invoiceActionLabel,
-                          isPaid
-                            ? styles.invoiceActionLabelSecondary
-                            : styles.invoiceActionLabelPrimary,
-                        ]}
-                      >
-                        {isPaid ? "Mark as unpaid" : "Confirm payment"}
-                      </Text>
+                      <View style={styles.invoiceActionButtonContent}>
+                        <Feather
+                          name={isPaid ? "rotate-ccw" : "check-circle"}
+                          size={16}
+                          color={isPaid ? Theme.palette.ink : "#FFFFFF"}
+                        />
+                        <Text
+                          style={[
+                            styles.invoiceActionLabel,
+                            isPaid
+                              ? styles.invoiceActionLabelSecondary
+                              : styles.invoiceActionLabelPrimary,
+                          ]}
+                        >
+                          {isPaid ? "Mark as unpaid" : "Confirm payment"}
+                        </Text>
+                        <Pressable
+                          style={styles.invoiceInfoButton}
+                          hitSlop={8}
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            showActionInfo(isPaid ? "Mark as unpaid" : "Confirm payment", confirmInfoCopy);
+                          }}
+                        >
+                          <Feather
+                            name="info"
+                            size={13}
+                            color={isPaid ? Theme.palette.ink : "#FFFFFF"}
+                          />
+                        </Pressable>
+                      </View>
                     </Pressable>
-                    <Text style={styles.invoiceActionHint}>
-                      {isPaid
-                        ? "Switch this back to collecting and restart reminders."
-                        : `DueSoon emails ${clientFriendlyName} right after you confirm payment.`}
-                    </Text>
+                    {canPauseResume ? (
+                      <Pressable
+                        style={[
+                          styles.invoiceActionButton,
+                          isPaused
+                            ? styles.invoiceActionButtonPrimary
+                            : styles.invoiceActionButtonSecondary,
+                        ]}
+                        onPress={() =>
+                          requestInvoiceAction(
+                            invoice,
+                            isPaused ? "resume" : "pause"
+                          )
+                        }
+                      >
+                        <View style={styles.invoiceActionButtonContent}>
+                          <Feather
+                            name={isPaused ? "play-circle" : "pause-circle"}
+                            size={16}
+                            color={isPaused ? "#FFFFFF" : Theme.palette.ink}
+                          />
+                          <Text
+                            style={[
+                              styles.invoiceActionLabel,
+                              isPaused
+                                ? styles.invoiceActionLabelPrimary
+                                : styles.invoiceActionLabelSecondary,
+                            ]}
+                          >
+                            {isPaused ? "Resume reminders" : "Pause invoice"}
+                          </Text>
+                          <Pressable
+                            style={styles.invoiceInfoButton}
+                            hitSlop={8}
+                            onPress={(event) => {
+                              event.stopPropagation();
+                              showActionInfo(
+                                isPaused ? "Resume reminders" : "Pause invoice",
+                                pauseInfoCopy
+                              );
+                            }}
+                          >
+                            <Feather
+                              name="info"
+                              size={13}
+                              color={isPaused ? "#FFFFFF" : Theme.palette.ink}
+                            />
+                          </Pressable>
+                        </View>
+                      </Pressable>
+                    ) : null}
+                    {canReschedule ? (
+                      <Pressable
+                        style={[
+                          styles.invoiceActionButton,
+                          styles.invoiceActionButtonSecondary,
+                        ]}
+                        onPress={() => openRescheduleModal(invoice)}
+                      >
+                        <View style={styles.invoiceActionButtonContent}>
+                          <Feather
+                            name="refresh-ccw"
+                            size={16}
+                            color={Theme.palette.ink}
+                          />
+                          <Text
+                            style={[
+                              styles.invoiceActionLabel,
+                              styles.invoiceActionLabelSecondary,
+                            ]}
+                          >
+                            Reschedule
+                          </Text>
+                          <Pressable
+                            style={styles.invoiceInfoButton}
+                            hitSlop={8}
+                            onPress={(event) => {
+                              event.stopPropagation();
+                              showActionInfo("Reschedule", rescheduleInfoCopy);
+                            }}
+                          >
+                            <Feather
+                              name="info"
+                              size={13}
+                              color={Theme.palette.ink}
+                            />
+                          </Pressable>
+                        </View>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -391,6 +678,153 @@ export default function ClientDetailScreen() {
                 )}
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={Boolean(rescheduleTarget)}
+        animationType="slide"
+        onRequestClose={closeRescheduleModal}
+      >
+        <SafeAreaView style={styles.rescheduleModal}>
+          <ScrollView contentContainerStyle={styles.rescheduleContent}>
+            <View style={styles.rescheduleHeader}>
+              <Text style={styles.rescheduleTitle}>Reschedule reminders</Text>
+              <Text style={styles.rescheduleSubtitle}>
+                {rescheduleTarget
+                  ? `Use the schedule picker to restart follow-ups for ${
+                      clientFriendlyName || "this client"
+                    }.`
+                  : null}
+              </Text>
+            </View>
+            <View style={styles.rescheduleTimezoneCard}>
+              <View>
+                <Text style={styles.infoLabel}>Reminder timezone</Text>
+                <Text style={styles.infoValue}>{rescheduleTimezone ?? reminderTimezone}</Text>
+              </View>
+              <Pressable
+                style={styles.rescheduleTimezoneButton}
+                onPress={() => setTimezonePickerVisible(true)}
+              >
+                <Feather name="map-pin" size={14} color="#FFFFFF" />
+                <Text style={styles.rescheduleTimezoneButtonLabel}>Change</Text>
+              </Pressable>
+            </View>
+            <ReminderSchedulePicker
+              key={rescheduleTarget?.id ?? "reschedule-picker"}
+              initialMode={
+                rescheduleDefaults?.mode ??
+                ((rescheduleTarget?.reminder_schedule?.mode as ReminderScheduleMode | undefined) ?? "manual")
+              }
+              initialSummary={rescheduleDefaults?.summary ?? null}
+              onChange={setRescheduleSelection}
+            />
+            {rescheduleError ? (
+              <Text style={styles.actionErrorText}>{rescheduleError}</Text>
+            ) : null}
+            <View style={styles.rescheduleActions}>
+              <Pressable
+                style={[styles.rescheduleButton, styles.rescheduleCancelButton]}
+                onPress={closeRescheduleModal}
+                disabled={rescheduleSaving}
+              >
+                <Text style={styles.rescheduleCancelLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.rescheduleButton,
+                  styles.rescheduleSaveButton,
+                  (!rescheduleSelection?.canSubmit || rescheduleSaving) &&
+                    styles.rescheduleButtonDisabled,
+                ]}
+                onPress={handleRescheduleSubmit}
+                disabled={!rescheduleSelection?.canSubmit || rescheduleSaving}
+              >
+                {rescheduleSaving ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.rescheduleSaveLabel}>Save schedule</Text>
+                )}
+              </Pressable>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+      <Modal
+        visible={timezonePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTimezonePickerVisible(false)}
+      >
+        <View style={styles.tzModalOverlay}>
+          <View style={styles.tzModalCard}>
+            <Text style={styles.tzModalTitle}>Select a timezone</Text>
+            <View style={styles.tzModalSearch}>
+              <Feather name="search" size={16} color={Theme.palette.slate} />
+              <TextInput
+                style={styles.tzModalInput}
+                placeholder="Search by region or offset"
+                placeholderTextColor={Theme.palette.slateSoft}
+                value={timezoneSearch}
+                onChangeText={setTimezoneSearch}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+            {timezoneListLoading ? (
+              <View style={styles.tzLoadingState}>
+                <ActivityIndicator color={Theme.palette.ink} />
+              </View>
+            ) : (
+              <ScrollView style={styles.tzList}>
+                {filteredRescheduleTimezones.map((entry) => {
+                  const active = entry.name === (rescheduleTimezone ?? reminderTimezone);
+                  return (
+                    <Pressable
+                      key={entry.name}
+                      style={[styles.tzRow, active && styles.tzRowActive]}
+                      onPress={() => handleRescheduleTimezoneSelect(entry.name)}
+                    >
+                      <View>
+                        <Text style={styles.tzRowLabel}>{entry.label}</Text>
+                        <Text style={styles.tzRowSubtle}>{entry.name}</Text>
+                      </View>
+                      {active ? (
+                        <Feather name="check" size={18} color={Theme.palette.slate} />
+                      ) : (
+                        <Feather name="circle" size={16} color={Theme.palette.slateSoft} />
+                      )}
+                    </Pressable>
+                  );
+                })}
+                {!filteredRescheduleTimezones.length && !timezoneListLoading ? (
+                  <Text style={styles.tzEmptyText}>No timezones match your search.</Text>
+                ) : null}
+              </ScrollView>
+            )}
+            <Pressable style={styles.tzDismissButton} onPress={() => setTimezonePickerVisible(false)}>
+              <Text style={styles.tzDismissLabel}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={Boolean(infoModal)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInfoModal(null)}
+      >
+        <View style={styles.infoOverlay}>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoTitle}>{infoModal?.title}</Text>
+            <Text style={styles.infoMessage}>{infoModal?.message}</Text>
+            <Pressable
+              style={[styles.infoDismissButton, styles.confirmButtonPrimary]}
+              onPress={() => setInfoModal(null)}
+            >
+              <Text style={styles.infoDismissLabel}>Got it</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -783,6 +1217,44 @@ function formatClientType(value: ClientType) {
   return value === "individual" ? "Individual" : "Business";
 }
 
+function buildConfirmCopy(mode: InvoiceActionMode, clientName: string) {
+  switch (mode) {
+    case "markPaid":
+      return {
+        title: "Confirm payment",
+        message: `DueSoon will mark this invoice as paid, pause reminders, and notify ${clientName} that you've confirmed their payment.`,
+        confirmLabel: "Confirm payment",
+      };
+    case "markUnpaid":
+      return {
+        title: "Mark as unpaid",
+        message:
+          "We’ll clear the paid timestamp, move this invoice back to collecting, and resume reminders based on its schedule.",
+        confirmLabel: "Mark unpaid",
+      };
+    case "pause":
+      return {
+        title: "Pause invoice",
+        message:
+          "DueSoon will pause this invoice and keep all reminders on hold until you resume it.",
+        confirmLabel: "Pause invoice",
+      };
+    case "resume":
+      return {
+        title: "Resume reminders",
+        message:
+          "We’ll switch the invoice back to active, re-enable reminders, and place it back in the sending queue.",
+        confirmLabel: "Resume invoice",
+      };
+    default:
+      return {
+        title: "Confirm",
+        message: "",
+        confirmLabel: "Confirm",
+      };
+  }
+}
+
 function formatContactPlatform(type: ContactMethod["type"]) {
   switch (type) {
     case "email":
@@ -1053,6 +1525,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Theme.palette.ink,
   },
+  clientTimezoneRow: {
+    marginTop: Theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Theme.spacing.sm,
+  },
+  clientTimezoneText: {
+    flex: 1,
+  },
+  clientTimezoneButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    backgroundColor: Theme.palette.ink,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.xs,
+  },
+  clientTimezoneButtonLabel: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 13,
+  },
   reminderBlock: {
     borderWidth: 1,
     borderColor: Theme.palette.border,
@@ -1268,8 +1764,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: Theme.spacing.xs,
     paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.md,
     borderRadius: Theme.radii.md,
   },
   invoiceActionButtonPrimary: {
@@ -1290,10 +1786,16 @@ const styles = StyleSheet.create({
   invoiceActionLabelSecondary: {
     color: Theme.palette.ink,
   },
-  invoiceActionHint: {
-    fontSize: 12,
-    color: Theme.palette.slateSoft,
-    lineHeight: 18,
+  invoiceActionButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+    flex: 1,
+  },
+  invoiceInfoButton: {
+    marginLeft: "auto",
+    padding: Theme.spacing.xs,
+    borderRadius: Theme.radii.full,
   },
   emptyState: {
     flex: 1,
@@ -1423,8 +1925,198 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+  rescheduleModal: {
+    flex: 1,
+    backgroundColor: Theme.palette.background,
+  },
+  rescheduleContent: {
+    flexGrow: 1,
+    paddingHorizontal: Theme.spacing.lg,
+    paddingVertical: Theme.spacing.xl,
+    gap: Theme.spacing.lg,
+  },
+  rescheduleHeader: {
+    gap: Theme.spacing.xs,
+  },
+  rescheduleTitle: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  rescheduleSubtitle: {
+    fontSize: 15,
+    color: Theme.palette.inkMuted,
+    lineHeight: 22,
+  },
+  rescheduleActions: {
+    flexDirection: "row",
+    gap: Theme.spacing.sm,
+  },
+  rescheduleTimezoneCard: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    padding: Theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: Theme.spacing.sm,
+  },
+  rescheduleTimezoneButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    backgroundColor: Theme.palette.ink,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.xs,
+  },
+  rescheduleTimezoneButtonLabel: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  rescheduleButton: {
+    flex: 1,
+    paddingVertical: Theme.spacing.md,
+    borderRadius: Theme.radii.md,
+    alignItems: "center",
+  },
+  rescheduleCancelButton: {
+    backgroundColor: Theme.palette.surface,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+  },
+  rescheduleSaveButton: {
+    backgroundColor: Theme.palette.slate,
+  },
+  rescheduleButtonDisabled: {
+    opacity: 0.4,
+  },
+  rescheduleCancelLabel: {
+    color: Theme.palette.ink,
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  rescheduleSaveLabel: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  infoOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(28, 31, 35, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  infoCard: {
+    width: "100%",
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  infoTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  infoMessage: {
+    fontSize: 15,
+    color: Theme.palette.slate,
+    lineHeight: 22,
+  },
+  infoDismissButton: {
+    paddingVertical: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+    alignItems: "center",
+  },
+  infoDismissLabel: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
   actionErrorText: {
     color: Theme.palette.accent,
     fontSize: 13,
+  },
+  tzModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: Theme.spacing.lg,
+  },
+  tzModalCard: {
+    width: "100%",
+    maxHeight: "80%",
+    borderRadius: Theme.radii.xl,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  tzModalTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  tzModalSearch: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.xs,
+  },
+  tzModalInput: {
+    flex: 1,
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  tzLoadingState: {
+    paddingVertical: Theme.spacing.lg,
+    alignItems: "center",
+  },
+  tzList: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.lg,
+    maxHeight: 360,
+  },
+  tzRow: {
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.palette.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  tzRowActive: {
+    backgroundColor: Theme.palette.surface,
+  },
+  tzRowLabel: {
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  tzRowSubtle: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  tzEmptyText: {
+    padding: Theme.spacing.md,
+    textAlign: "center",
+    color: Theme.palette.slate,
+  },
+  tzDismissButton: {
+    alignSelf: "flex-end",
+    paddingHorizontal: Theme.spacing.lg,
+    paddingVertical: Theme.spacing.sm,
+  },
+  tzDismissLabel: {
+    color: Theme.palette.ink,
+    fontWeight: "600",
   },
 });

@@ -42,6 +42,7 @@ export type Client = {
   company_name?: string | null;
   notes?: string | null;
   client_type: ClientType;
+  timezone?: string | null;
   contact_methods: ContactMethod[];
   user_id: string;
   created_at: string;
@@ -53,6 +54,7 @@ export type ClientCreatePayload = {
   company_name?: string | null;
   notes?: string | null;
   client_type: ClientType;
+  timezone?: string | null;
   contact_methods: ContactMethodPayload[];
 };
 

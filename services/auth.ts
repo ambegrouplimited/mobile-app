@@ -19,6 +19,8 @@ export type AuthUser = {
   created_at: string;
   notification_settings?: NotificationSettings;
   channels?: Record<string, boolean>;
+  default_currency?: string;
+  default_timezone?: string;
 };
 
 export type TokenResponse = {
@@ -144,6 +146,8 @@ export type UpdateUserPayload = {
   name?: string;
   type?: string;
   notification_settings?: Partial<NotificationSettings>;
+  default_currency?: string;
+  default_timezone?: string;
 };
 
 export function updateCurrentUser(payload: UpdateUserPayload, token: string) {

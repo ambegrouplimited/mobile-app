@@ -19,6 +19,16 @@ function getParam(value: string | string[] | undefined) {
   return value;
 }
 
+function formatHeaderAmount(amount?: string, currency?: string | null) {
+  if (!amount) {
+    return undefined;
+  }
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(amount)) {
+    return amount;
+  }
+  return currency ? `${currency.toUpperCase()} ${amount}` : amount;
+}
+
 export default function ReminderDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -31,6 +41,7 @@ export default function ReminderDetailScreen() {
     invoiceId?: string | string[];
     clientId?: string | string[];
     platform?: string | string[];
+    currency?: string | string[];
   }>();
   const id = getParam(params.id);
   const reminder = id ? reminderDetails[id] : undefined;
@@ -42,8 +53,9 @@ export default function ReminderDetailScreen() {
   const invoiceId = getParam(params.invoiceId);
   const clientId = getParam(params.clientId);
   const platform = getParam(params.platform);
+  const paramCurrency = getParam(params.currency);
   const headerClient = paramClient ?? reminder?.client;
-  const headerAmount = paramAmount ?? reminder?.amount;
+  const headerAmount = paramAmount ? formatHeaderAmount(paramAmount, paramCurrency) : reminder?.amount;
   const headerStatus = paramStatus ?? reminder?.status;
   const headerNextAction = paramNextAction ?? reminder?.nextAction;
   const headerSchedule = paramSchedule ?? reminder?.scheduleMode;
@@ -63,7 +75,8 @@ export default function ReminderDetailScreen() {
     if (clientId) nextParams.clientId = clientId;
     if (platform) nextParams.platform = platform;
     if (headerClient) nextParams.client = headerClient;
-    if (headerAmount) nextParams.amount = headerAmount;
+    if (paramAmount) nextParams.amount = paramAmount;
+    if (paramCurrency) nextParams.currency = paramCurrency;
     if (headerStatus) nextParams.status = headerStatus;
     if (headerNextAction) nextParams.nextAction = headerNextAction;
     if (headerSchedule) nextParams.schedule = headerSchedule;

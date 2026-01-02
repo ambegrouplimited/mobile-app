@@ -7,6 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
 import { ReminderSummaryDetails } from "@/components/reminder-summary";
+import { buildSchedulePayload } from "@/lib/reminder-schedule";
 import { ReminderSummaryData } from "@/types/reminders";
 import { useAuth } from "@/providers/auth-provider";
 import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
@@ -31,13 +32,17 @@ export default function SummaryScreen() {
   const paymentInfo = useMemo(() => parseJSON(params.payment), [params.payment]);
   const scheduleMode = (params.scheduleMode as ReminderSummaryData["schedule"]["mode"]) ?? "manual";
   const scheduleInfo = useMemo(() => parseJSON(params.scheduleSummary), [params.scheduleSummary]);
+  const fallbackTimezone = session?.user?.default_timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  const timezone = params.timezone ?? fallbackTimezone;
 
+  const currency = (params.currency ?? "USD").toUpperCase();
   const summaryData: ReminderSummaryData = {
     client: {
       name: params.client || "Not provided",
       type: params.clientType ?? "Not set",
       businessName: params.businessName,
       amount: params.amount || "Not provided",
+      currency,
       dueDate: params.dueDate,
     },
     contact: {
@@ -56,6 +61,7 @@ export default function SummaryScreen() {
       mode: scheduleMode,
       data: scheduleInfo ?? undefined,
     },
+    timezone,
   };
 
   useReminderDraftPersistor({
@@ -64,7 +70,7 @@ export default function SummaryScreen() {
     params: draftParams,
     metadata: {
       client_name: params.client || "New reminder",
-      amount_display: params.amount || null,
+      amount_display: params.amount ? `${currency} ${params.amount}` : null,
       status: "Ready to send",
       next_action: "Finish scheduling when you're ready.",
     },
@@ -129,6 +135,7 @@ export default function SummaryScreen() {
               params,
               scheduleMode,
               scheduleInfo,
+              timezone,
               sessionToken: session?.accessToken ?? null,
               draftId,
               setError: setSubmitError,
@@ -148,6 +155,7 @@ async function handleSubmit({
   params,
   scheduleMode,
   scheduleInfo,
+  timezone,
   sessionToken,
   draftId,
   setError,
@@ -157,6 +165,7 @@ async function handleSubmit({
   params: Record<string, string>;
   scheduleMode: ReminderSummaryData["schedule"]["mode"];
   scheduleInfo: unknown;
+  timezone: string;
   sessionToken: string | null;
   draftId?: string | null;
   setError: (value: string | null) => void;
@@ -185,16 +194,22 @@ async function handleSubmit({
     setError("Add at least one schedule entry before sending.");
     return;
   }
+  if (!timezone) {
+    setError("Select a timezone before finishing.");
+    return;
+  }
 
+  const currency = (params.currency ?? "USD").toUpperCase();
   const payload: InvoiceCreatePayload = {
     client_id: params.clientId,
     contact_method_id: params.contactMethodId,
     amount: amountValue,
-    currency: "USD",
+    currency,
     description: params.notes || null,
     due_date: params.dueDate ? formatDueDateTimestamp(params.dueDate) : null,
     send_via: resolveDeliveryChannel(params.platform, params.mode),
     reminder_schedule: schedulePayload,
+    timezone,
     payment_method_ids: [params.paymentMethodId],
     custom_payment_methods: [],
     sync_to_paypal: false,
@@ -333,70 +348,6 @@ function formatDueDateTimestamp(value: string) {
   return new Date(iso).toISOString();
 }
 
-function buildSchedulePayload(
-  mode: ReminderSummaryData["schedule"]["mode"],
-  rawData: any,
-): ReminderSchedulePayload | null {
-  if (!rawData) {
-    return null;
-  }
-  if (mode === "manual") {
-    const entries = rawData.entries ?? [];
-    if (!entries.length) {
-      return null;
-    }
-    return {
-      mode: "manual",
-      manual_dates: entries.map((entry: any) => toDateTime(entry.date, entry.time)),
-      tone_sequence: entries.map((entry: any) => entry.tone ?? "gentle"),
-      max_reminders: entries.length,
-    };
-  }
-  if (mode === "weekly") {
-    return {
-      mode: "weekly",
-      weekly_pattern: {
-        weekdays: Array.isArray(rawData.days) ? rawData.days : [],
-        time_of_day: toTimeOfDay(rawData.time),
-      },
-      tone_sequence: rawData.tones ?? [],
-      max_reminders: toNumberValue(rawData.maxReminders),
-    };
-  }
-  return {
-    mode: "cadence",
-    cadence: {
-      frequency_days: toNumberValue(rawData.frequencyDays ?? rawData.frequency_days) ?? 0,
-      start_date: rawData.startDate ?? rawData.start_date ?? null,
-      start_time: rawData.startTime ? toTimeOfDay(rawData.startTime) : null,
-    },
-    tone_sequence: rawData.tones ?? [],
-    max_reminders: toNumberValue(rawData.maxReminders),
-  };
-}
-
-function toDateTime(date: string, time: string) {
-  if (!date) {
-    return new Date().toISOString();
-  }
-  const safeTime = time && time.includes(":") ? time : "09:00";
-  const iso = new Date(`${date}T${safeTime}:00`);
-  return iso.toISOString();
-}
-
-function toTimeOfDay(value?: string) {
-  if (!value) {
-    return "09:00:00";
-  }
-  if (/^\d{2}:\d{2}$/.test(value)) {
-    return `${value}:00`;
-  }
-  if (/^\d{2}:\d{2}:\d{2}$/.test(value)) {
-    return value;
-  }
-  return `${value}:00`;
-}
-
 function resolveDeliveryChannel(platform?: string, mode?: string): DeliveryChannel {
   if (platform === "gmail") {
     return mode === "self" ? "gmail" : "mailgun";
@@ -414,13 +365,4 @@ function resolveDeliveryChannel(platform?: string, mode?: string): DeliveryChann
     return "slack";
   }
   return "mailgun";
-}
-
-function toNumberValue(value: unknown) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }

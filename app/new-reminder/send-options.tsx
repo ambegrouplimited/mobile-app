@@ -233,11 +233,11 @@ export default function SendOptionsScreen() {
   const metadata = useMemo(
     () => ({
       client_name: baseParams.client || "New reminder",
-      amount_display: baseParams.amount || null,
+      amount_display: formatAmountDisplay(baseParams.amount, baseParams.currency),
       status: hasContactDetails ? "Contact saved" : "Add contact details",
       next_action: hasContactDetails ? "Attach a payment method." : "Fill in the contact details.",
     }),
-    [baseParams.amount, baseParams.client, hasContactDetails],
+    [baseParams.amount, baseParams.currency, baseParams.client, hasContactDetails],
   );
   const handleReturnToReminders = () => {
     router.replace("/reminders");
@@ -1681,6 +1681,14 @@ function formatTelegramMeta(status: TelegramStatus) {
   const username = status.connection?.telegram_username;
   if (!username) return null;
   return username.startsWith("@") ? username : `@${username}`;
+}
+
+function formatAmountDisplay(amount?: string, currency?: string) {
+  if (!amount) return null;
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(amount)) {
+    return amount;
+  }
+  return currency ? `${currency.toUpperCase()} ${amount}` : amount;
 }
 
 function getRedirectUri() {

@@ -37,11 +37,11 @@ export default function ContactPlatformScreen() {
   const metadata = useMemo(
     () => ({
       client_name: baseParams.client || "New reminder",
-      amount_display: baseParams.amount || null,
+      amount_display: formatAmountDisplay(baseParams.amount, baseParams.currency),
       status: "Delivery channel",
       next_action: "Confirm delivery preferences.",
     }),
-    [baseParams.amount, baseParams.client],
+    [baseParams.amount, baseParams.client, baseParams.currency],
   );
   const handleReturnToReminders = () => {
     router.replace("/reminders");
@@ -158,6 +158,14 @@ function normalizeParams(params: Record<string, string | string[]>) {
     }
   });
   return result;
+}
+
+function formatAmountDisplay(amount?: string, currency?: string) {
+  if (!amount) return null;
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(amount)) {
+    return amount;
+  }
+  return currency ? `${currency.toUpperCase()} ${amount}` : amount;
 }
 
 function formatLabel(id: ContactPlatformId) {

@@ -55,6 +55,7 @@ export type ReminderSummaryData = {
     type: string;
     businessName?: string;
     amount: string;
+    currency?: string;
     dueDate?: string;
   };
   contact: {
@@ -64,6 +65,7 @@ export type ReminderSummaryData = {
   };
   payment: ReminderSummaryPayment;
   schedule: ReminderScheduleSummary;
+  timezone?: string;
 };
 
 export type UpcomingReminder = {

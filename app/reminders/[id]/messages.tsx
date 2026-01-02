@@ -36,6 +36,7 @@ export default function ReminderMessagesScreen() {
     amount?: string;
     status?: string;
     platform?: string;
+    currency?: string;
   }>();
   const id = getParam(params.id);
   const reminder = id ? reminderDetails[id] : undefined;
@@ -45,8 +46,11 @@ export default function ReminderMessagesScreen() {
   const paramStatus = getParam(params.status);
   const paramPlatform = getParam(params.platform);
   const scrollRef = useRef<ScrollView>(null);
+  const paramCurrency = getParam(params.currency);
   const headerClient = paramClient ?? reminder?.client ?? "Client";
-  const headerAmount = paramAmount ?? reminder?.amount;
+  const headerAmount = paramAmount
+    ? formatHeaderAmount(paramAmount, paramCurrency)
+    : reminder?.amount;
   const headerStatus = paramStatus ?? reminder?.status;
   const platformSource = paramPlatform ?? reminder?.platform;
 
@@ -479,4 +483,14 @@ function getParam(value?: string | string[]) {
     return value[0];
   }
   return value;
+}
+
+function formatHeaderAmount(amount?: string, currency?: string | null) {
+  if (!amount) {
+    return undefined;
+  }
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(amount)) {
+    return amount;
+  }
+  return currency ? `${currency.toUpperCase()} ${amount}` : amount;
 }

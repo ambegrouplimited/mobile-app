@@ -64,6 +64,7 @@ const reminderRecords: Record<string, ReminderRecord> = {
         type: "Business",
         businessName: "Northwind Co.",
         amount: "$4,800",
+        currency: "USD",
       },
       contact: {
         platform: "mailgun",
@@ -136,6 +137,7 @@ const reminderRecords: Record<string, ReminderRecord> = {
         type: "Business",
         businessName: "Arbor Lane Studio",
         amount: "$2,200",
+        currency: "USD",
       },
       contact: {
         platform: "gmail",
@@ -210,6 +212,7 @@ const reminderRecords: Record<string, ReminderRecord> = {
         type: "Individual",
         businessName: "Freelance producer",
         amount: "$1,250",
+        currency: "USD",
       },
       contact: {
         platform: "mailgun",
@@ -292,6 +295,7 @@ const reminderRecords: Record<string, ReminderRecord> = {
         type: "Business",
         businessName: "Sable Works",
         amount: "$1,450",
+        currency: "USD",
       },
       contact: {
         platform: "mailgun",

@@ -112,11 +112,11 @@ export default function ReminderPaymentMethodScreen() {
   const metadata = useMemo(
     () => ({
       client_name: baseParams.client || "New reminder",
-      amount_display: baseParams.amount || null,
+      amount_display: formatAmountDisplay(baseParams.amount, baseParams.currency),
       status: selectedMethod ? "Payment method ready" : "Attach a payment method",
       next_action: selectedMethod ? "Schedule the reminder cadence." : "Choose how clients will pay.",
     }),
-    [baseParams.amount, baseParams.client, selectedMethod],
+    [baseParams.amount, baseParams.currency, baseParams.client, selectedMethod],
   );
   const handleReturnToReminders = () => {
     router.replace("/reminders");
@@ -493,3 +493,11 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
+
+function formatAmountDisplay(amount?: string, currency?: string) {
+  if (!amount) return null;
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(amount)) {
+    return amount;
+  }
+  return currency ? `${currency.toUpperCase()} ${amount}` : amount;
+}

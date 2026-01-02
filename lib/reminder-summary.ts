@@ -31,6 +31,7 @@ export function buildReminderSummaryFromResources({
       type: formatClientType(client?.client_type ?? "business"),
       businessName: client?.company_name ?? undefined,
       amount: formatCurrency(invoice.amount, invoice.currency),
+      currency: invoice.currency,
       dueDate: invoice.due_date ?? undefined,
     },
     contact: {

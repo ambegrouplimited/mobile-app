@@ -362,6 +362,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       type?: string;
       notificationSettings?: NotificationSettingsPayload;
       channels?: Record<string, boolean>;
+      defaultCurrency?: string;
+      defaultTimezone?: string;
     }) => {
       if (!session?.accessToken) {
         throw new Error("You need to be signed in to update your profile.");
@@ -371,6 +373,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         type?: string;
         notification_settings?: NotificationSettingsPayload;
         channels?: Record<string, boolean>;
+        default_currency?: string;
+        default_timezone?: string;
       } = {};
       if (payload.name !== undefined) {
         body.name = payload.name.trim();
@@ -384,11 +388,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (payload.channels) {
         body.channels = payload.channels;
       }
+      if (payload.defaultCurrency) {
+        body.default_currency = payload.defaultCurrency.toLowerCase();
+      }
+      if (payload.defaultTimezone) {
+        body.default_timezone = payload.defaultTimezone;
+      }
       if (
         !body.name &&
         !body.type &&
         !body.notification_settings &&
-        !body.channels
+        !body.channels &&
+        !body.default_currency &&
+        !body.default_timezone
       ) {
         throw new Error("No changes to update.");
       }

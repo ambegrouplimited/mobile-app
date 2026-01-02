@@ -46,11 +46,13 @@ export type Invoice = {
   user_id: string;
   client_id: string;
   amount: number;
+  amount_usd?: number;
   currency: string;
   description: string | null;
   due_date: string | null;
   status: InvoiceStatus;
   send_via: DeliveryChannel;
+  timezone?: string | null;
   contact_method_id: string;
   contact_method: ContactMethod;
   reminder_schedule: ReminderSchedulePayload;
@@ -70,6 +72,7 @@ export type InvoiceCreatePayload = {
   description?: string | null;
   due_date?: string | null;
   send_via: DeliveryChannel;
+  timezone?: string | null;
   reminder_schedule: ReminderSchedulePayload;
   payment_method_ids?: string[];
   custom_payment_methods?: Record<string, unknown>[];

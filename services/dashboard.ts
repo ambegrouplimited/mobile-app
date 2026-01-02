@@ -1,17 +1,40 @@
 import { apiFetch } from "@/lib/api-client";
 import type { Client } from "@/types/clients";
 
+export type DisplayAmount = {
+  currency: string;
+  amount: number;
+};
+
+export type CurrencyTotal = {
+  usd: number;
+  display: DisplayAmount;
+};
+
+export type AmountBreakdown = {
+  by_currency: {
+    currency: string;
+    amount: number;
+    amount_usd: number;
+    display_amount: DisplayAmount;
+  }[];
+  total_usd: number;
+  display_total: DisplayAmount;
+};
+
 export type DashboardMetrics = {
   clients_waiting_payment: number;
-  total_outstanding: number;
-  total_paid_this_week: number;
+  total_outstanding: CurrencyTotal;
+  total_paid_this_week: CurrencyTotal;
   clients_paid_this_week: number;
 };
 
 export type DashboardPaidInvoice = {
   invoice_id: string;
   amount: number;
+  amount_usd: number;
   currency: string;
+  display_amount: DisplayAmount;
   paid_at: string;
 };
 
@@ -21,11 +44,13 @@ export type DashboardClientSummary = {
   client: Client;
   total_amount: number;
   payment_status?: PaymentStatus;
+  amounts: AmountBreakdown;
 };
 
 export type DashboardPaidClient = {
   client: Client;
   total_paid: number;
+  amounts: AmountBreakdown;
   invoices: DashboardPaidInvoice[];
 };
 

@@ -1,8 +1,9 @@
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -19,11 +20,13 @@ import {
   buildOutstandingClientRow,
   buildPaidClientRow,
   buildPastClientRow,
+  type CurrencyDisplayMode,
   formatCurrency,
 } from "@/lib/dashboard-clients";
 import { useAuth } from "@/providers/auth-provider";
 import {
   fetchDashboardSummary,
+  type CurrencyTotal,
   type DashboardSummary,
 } from "@/services/dashboard";
 
@@ -38,7 +41,8 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fetchedClientsRef = useRef<Set<string>>(new Set());
+  const [metricsCurrencyMode, setMetricsCurrencyMode] =
+    useState<CurrencyDisplayMode>("display");
 
   const loadSummary = useCallback(
     async (options?: { isRefreshing?: boolean }) => {
@@ -88,18 +92,38 @@ export default function DashboardScreen() {
     loadSummary();
   }, [loadSummary]);
 
+  const displayCurrencyCode = useMemo(() => {
+    const candidates = [
+      summary?.metrics?.total_outstanding?.display?.currency,
+      summary?.metrics?.total_paid_this_week?.display?.currency,
+      summary?.active_clients?.[0]?.amounts?.display_total?.currency,
+      summary?.paid_clients_this_week?.[0]?.amounts?.display_total?.currency,
+      summary?.past_clients?.[0]?.amounts?.display_total?.currency,
+    ]
+      .map((code) => code?.toUpperCase())
+      .filter(Boolean) as string[];
+    return candidates[0] ?? "USD";
+  }, [summary]);
+
+  const metricCurrencyOptions = useMemo(() => {
+    const isDisplayUsd = displayCurrencyCode === "USD";
+    const displayLabel = isDisplayUsd
+      ? "USD (Display)"
+      : displayCurrencyCode;
+    return [
+      { value: "display", label: displayLabel },
+      { value: "usd", label: "USD" },
+    ];
+  }, [displayCurrencyCode]);
+
   const summaryStats = useMemo(() => {
     const metrics = summary?.metrics;
-    const outstandingCurrency = "USD";
-    const paidCurrency =
-      summary?.paid_clients_this_week?.[0]?.invoices?.[0]?.currency ??
-      outstandingCurrency;
     return [
       {
         label: "Outstanding",
-        value: formatCurrency(
-          metrics?.total_outstanding ?? 0,
-          outstandingCurrency
+        value: formatMetricTotal(
+          metrics?.total_outstanding,
+          metricsCurrencyMode
         ),
         caption: metrics
           ? `${metrics.clients_waiting_payment} client${
@@ -109,7 +133,10 @@ export default function DashboardScreen() {
       },
       {
         label: "Paid this week",
-        value: formatCurrency(metrics?.total_paid_this_week ?? 0, paidCurrency),
+        value: formatMetricTotal(
+          metrics?.total_paid_this_week,
+          metricsCurrencyMode
+        ),
         caption: metrics
           ? `${metrics.clients_paid_this_week} client${
               metrics.clients_paid_this_week === 1 ? "" : "s"
@@ -117,7 +144,7 @@ export default function DashboardScreen() {
           : "No payments recorded",
       },
     ];
-  }, [summary]);
+  }, [summary, metricsCurrencyMode]);
 
   const unpaidClients = useMemo<ClientListItem[]>(() => {
     if (!summary) return [];
@@ -145,7 +172,9 @@ export default function DashboardScreen() {
 
   const pastClientRows = useMemo<ClientListItem[]>(() => {
     if (!summary) return [];
-    return summary.past_clients.map((entry) => buildPastClientRow(entry));
+    return summary.past_clients.map((entry) =>
+      buildPastClientRow(entry)
+    );
   }, [summary]);
   const limitedPastClients = useMemo(
     () => pastClientRows.slice(0, 5),
@@ -192,6 +221,18 @@ export default function DashboardScreen() {
         }
       >
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <View style={styles.summaryControls}>
+          <View style={styles.currencySelectorRow}>
+            <Text style={styles.currencySelectorLabel}>Show totals in</Text>
+            <CurrencyDropdown
+              value={metricsCurrencyMode}
+              options={metricCurrencyOptions}
+              onChange={(value) =>
+                setMetricsCurrencyMode(value as CurrencyDisplayMode)
+              }
+            />
+          </View>
+        </View>
         <View style={styles.summaryRow}>
           {summaryStats.map((stat) => (
             <View key={stat.label} style={styles.summaryCard}>
@@ -283,7 +324,23 @@ export function ClientList({
   onAction?: () => void;
   totalCount?: number;
 }) {
+  const [clientCurrencySelections, setClientCurrencySelections] = useState<
+    Record<string, string>
+  >({});
   const showEmpty = !loading && list.length === 0;
+
+  const handleClientCurrencyChange = useCallback(
+    (id: string, value: string) => {
+      setClientCurrencySelections((prev) => {
+        if (prev[id] === value) {
+          return prev;
+        }
+        return { ...prev, [id]: value };
+      });
+    },
+    []
+  );
+
   return (
     <View style={[styles.listCard, muted && styles.listCardMuted]}>
       <View style={styles.listHeader}>
@@ -337,6 +394,20 @@ export function ClientList({
               : "alert-circle";
           const iconColor =
             tone === "paid" ? Theme.palette.success : Theme.palette.slate;
+          const dropdownOptions =
+            client.amount_options?.map((option) => ({
+              value: option.id,
+              label: option.label,
+            })) ?? [];
+          const defaultSelection = dropdownOptions[0]?.value;
+          const selectedId =
+            clientCurrencySelections[client.id] ?? defaultSelection;
+          const selectedAmount =
+            client.amount_options?.find((option) => option.id === selectedId) ??
+            client.amount_options?.[0];
+          const amountDisplay = selectedAmount
+            ? formatCurrency(selectedAmount.amount, selectedAmount.currency)
+            : client.amount;
           return (
             <Pressable
               key={client.id}
@@ -355,7 +426,17 @@ export function ClientList({
                 <Text style={styles.clientDetail}>{client.detail}</Text>
               </View>
               <View style={styles.clientAmounts}>
-                <Text style={styles.clientAmount}>{client.amount}</Text>
+                <Text style={styles.clientAmount}>{amountDisplay}</Text>
+                {dropdownOptions.length ? (
+                  <CurrencyDropdown
+                    value={selectedId ?? dropdownOptions[0].value}
+                    options={dropdownOptions}
+                    onChange={(value) =>
+                      handleClientCurrencyChange(client.id, value)
+                    }
+                    variant="inline"
+                  />
+                ) : null}
                 <View style={[styles.badge, badgeStyle]}>
                   <Feather name={iconName} size={14} color={iconColor} />
                   <Text style={[styles.badgeLabel, labelStyle]}>
@@ -369,6 +450,115 @@ export function ClientList({
       )}
     </View>
   );
+}
+
+type CurrencyOption = { value: string; label: string };
+
+function CurrencyDropdown({
+  value,
+  options,
+  onChange,
+  variant = "default",
+}: {
+  value: string;
+  options: CurrencyOption[];
+  onChange: (mode: string) => void;
+  variant?: "default" | "inline";
+}) {
+  const [visible, setVisible] = useState(false);
+  const selected =
+    options.find((option) => option.value === value) ?? options[0];
+  const canToggle = options.length > 1;
+
+  const handleSelect = (mode: string) => {
+    setVisible(false);
+    if (mode !== value) {
+      onChange(mode);
+    }
+  };
+
+  const buttonStyle =
+    variant === "inline"
+      ? styles.currencyDropdownButtonInline
+      : styles.currencyDropdownButton;
+  const textStyle =
+    variant === "inline"
+      ? styles.currencyDropdownTextInline
+      : styles.currencyDropdownText;
+
+  return (
+    <>
+      <Pressable
+        style={[
+          buttonStyle,
+          !canToggle && styles.currencyDropdownButtonDisabled,
+        ]}
+        onPress={() => (canToggle ? setVisible(true) : undefined)}
+        hitSlop={8}
+      >
+        <Text style={textStyle}>
+          {selected?.label ?? value.toUpperCase()}
+        </Text>
+        {canToggle ? (
+          <Feather name="chevron-down" size={14} color={Theme.palette.ink} />
+        ) : null}
+      </Pressable>
+      <Modal
+        transparent
+        animationType="fade"
+        visible={visible}
+        onRequestClose={() => setVisible(false)}
+      >
+        <View style={styles.currencyDropdownOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setVisible(false)}
+          />
+          <View style={styles.currencyDropdownMenu}>
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[
+                    styles.currencyDropdownOption,
+                    active && styles.currencyDropdownOptionActive,
+                  ]}
+                  onPress={() => handleSelect(option.value)}
+                >
+                  <Text
+                    style={[
+                      styles.currencyDropdownOptionText,
+                      active && styles.currencyDropdownOptionTextActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+function formatMetricTotal(
+  total?: CurrencyTotal,
+  mode: CurrencyDisplayMode = "display"
+) {
+  if (!total) {
+    return "—";
+  }
+  if (mode === "usd") {
+    return formatCurrency(total.usd ?? 0, "USD");
+  }
+  const display = total.display;
+  if (display) {
+    return formatCurrency(display.amount, display.currency);
+  }
+  return formatCurrency(total.usd ?? 0, "USD");
 }
 
 const styles = StyleSheet.create({
@@ -568,5 +758,81 @@ const styles = StyleSheet.create({
   },
   badgeLabelDue: {
     color: Theme.palette.slate,
+  },
+  summaryControls: {
+    alignItems: "flex-end",
+  },
+  currencySelectorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    marginBottom: Theme.spacing.sm,
+  },
+  currencySelectorLabel: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  currencyDropdownButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Theme.radii.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    paddingHorizontal: Theme.spacing.sm,
+    paddingVertical: Theme.spacing.xs,
+    backgroundColor: Theme.palette.surface,
+  },
+  currencyDropdownButtonDisabled: {
+    opacity: 0.6,
+  },
+  currencyDropdownText: {
+    fontSize: 13,
+    color: Theme.palette.ink,
+    fontWeight: "500",
+  },
+  currencyDropdownButtonInline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: Theme.radii.sm,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: 2,
+  },
+  currencyDropdownTextInline: {
+    fontSize: 12,
+    color: Theme.palette.slate,
+    fontWeight: "500",
+  },
+  currencyDropdownOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(16, 22, 32, 0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  currencyDropdownMenu: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: Theme.radii.lg,
+    paddingVertical: 4,
+    width: 200,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+  },
+  currencyDropdownOption: {
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.lg,
+  },
+  currencyDropdownOptionActive: {
+    backgroundColor: Theme.palette.surface,
+  },
+  currencyDropdownOptionText: {
+    fontSize: 15,
+    color: Theme.palette.ink,
+  },
+  currencyDropdownOptionTextActive: {
+    fontWeight: "600",
   },
 });

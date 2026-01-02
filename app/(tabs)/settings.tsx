@@ -2,18 +2,62 @@ import { Feather, FontAwesome } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useState } from "react";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Theme } from "@/constants/theme";
 import { useAuth } from "@/providers/auth-provider";
 
 const settingsItems = [
-  { icon: "user", label: "Account", detail: "Profile, email aliases", route: "/profile/account" },
-  { icon: "bell", label: "Notifications", detail: "Reminder cadence & alerts", route: "/settings/notifications" },
-  { icon: "credit-card", label: "Payment methods", detail: "Bank, Stripe, crypto", route: "/settings/payment-methods" },
-  { icon: "message-square", label: "Messaging connections", detail: "Gmail, WhatsApp, Slack", route: "/settings/messaging-connections" },
-  { icon: "shield", label: "Security", detail: "Two-factor, devices", route: "/settings/security" },
+  {
+    icon: "user",
+    label: "Account",
+    detail: "Profile, email aliases",
+    route: "/profile/account",
+  },
+  {
+    icon: "bell",
+    label: "Notifications",
+    detail: "Reminder cadence & alerts",
+    route: "/settings/notifications",
+  },
+  {
+    icon: "dollar-sign",
+    label: "Currency",
+    detail: "Default currency",
+    route: "/settings/currency",
+  },
+  {
+    icon: "clock",
+    label: "Timezone",
+    detail: "Reminder timezone",
+    route: "/settings/timezone",
+  },
+  {
+    icon: "credit-card",
+    label: "Payment methods",
+    detail: "Bank, Stripe, crypto",
+    route: "/settings/payment-methods",
+  },
+  {
+    icon: "message-square",
+    label: "Messaging connections",
+    detail: "Gmail, WhatsApp, Slack",
+    route: "/settings/messaging-connections",
+  },
+  {
+    icon: "shield",
+    label: "Security",
+    detail: "Two-factor, devices",
+    route: "/settings/security",
+  },
 ];
 
 export default function SettingsScreen() {
@@ -22,55 +66,92 @@ export default function SettingsScreen() {
   const displayName = user?.name ?? "DueSoon Demo";
   const avatarUri = (user as { avatarUrl?: string } | undefined)?.avatarUrl;
   const router = useRouter();
+  const currencyLabel = (user?.default_currency ?? "USD").toUpperCase();
+  const timezoneLabel = user?.default_timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
-        <View style={styles.profileCard}>
-          <View style={styles.avatarCircle}>
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatar} contentFit="cover" />
-            ) : (
-              <FontAwesome name="user" size={44} color={Theme.palette.slate} />
-            )}
+      <ScrollView bounces={true} contentInsetAdjustmentBehavior="automatic">
+        <View style={styles.container}>
+          <View style={styles.profileCard}>
+            <View style={styles.avatarCircle}>
+              {avatarUri ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.avatar}
+                  contentFit="cover"
+                />
+              ) : (
+                <FontAwesome
+                  name="user"
+                  size={44}
+                  color={Theme.palette.slate}
+                />
+              )}
+            </View>
+            <Text style={styles.profileName}>{displayName}</Text>
           </View>
-          <Text style={styles.profileName}>{displayName}</Text>
-        </View>
 
-        <View style={styles.list}>
-          {settingsItems.map((item, index) => (
-            <Pressable
-              key={item.label}
-              style={[styles.row, index === settingsItems.length - 1 && styles.rowLast]}
-              onPress={() => {
-                if (item.route) {
-                  router.push(item.route);
-                }
-              }}
-            >
-              <View style={styles.iconWrap}>
-                <Feather name={item.icon as keyof typeof Feather.glyphMap} size={18} color={Theme.palette.slate} />
-              </View>
-              <View style={styles.textBlock}>
-                <Text style={styles.label}>{item.label}</Text>
-                <Text style={styles.detail}>{item.detail}</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={Theme.palette.slateSoft} />
-            </Pressable>
-          ))}
+          <View style={styles.list}>
+            {settingsItems.map((item, index) => (
+              <Pressable
+                key={item.label}
+                style={[
+                  styles.row,
+                  index === settingsItems.length - 1 && styles.rowLast,
+                ]}
+                onPress={() => {
+                  if (item.route) {
+                    router.push(item.route);
+                  }
+                }}
+              >
+                <View style={styles.iconWrap}>
+                  <Feather
+                    name={item.icon as keyof typeof Feather.glyphMap}
+                    size={18}
+                    color={Theme.palette.slate}
+                  />
+                </View>
+                <View style={styles.textBlock}>
+                  <Text style={styles.label}>{item.label}</Text>
+                  <Text style={styles.detail}>
+                    {item.label === "Currency"
+                      ? currencyLabel
+                      : item.label === "Timezone"
+                        ? timezoneLabel
+                        : item.detail}
+                  </Text>
+                </View>
+                <Feather
+                  name="chevron-right"
+                  size={18}
+                  color={Theme.palette.slateSoft}
+                />
+              </Pressable>
+            ))}
+          </View>
+          <Pressable
+            style={styles.logoutButton}
+            onPress={() => setConfirmVisible(true)}
+          >
+            <Text style={styles.logoutText}>Log out</Text>
+          </Pressable>
         </View>
-        <Pressable style={styles.logoutButton} onPress={() => setConfirmVisible(true)}>
-          <Text style={styles.logoutText}>Log out</Text>
-        </Pressable>
-      </View>
+      </ScrollView>
 
       <Modal visible={confirmVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Log out</Text>
-            <Text style={styles.modalSubtitle}>You’ll need to sign back in to manage reminders and clients.</Text>
+            <Text style={styles.modalSubtitle}>
+              You’ll need to sign back in to manage reminders and clients.
+            </Text>
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalButtonMuted} onPress={() => setConfirmVisible(false)}>
+              <Pressable
+                style={styles.modalButtonMuted}
+                onPress={() => setConfirmVisible(false)}
+              >
                 <Text style={styles.modalButtonMutedText}>Cancel</Text>
               </Pressable>
               <Pressable
@@ -96,10 +177,10 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.palette.background,
   },
   container: {
-    flex: 1,
     paddingHorizontal: Theme.spacing.lg,
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
+    paddingBottom: Theme.spacing.xxxl,
   },
   profileCard: {
     alignItems: "center",

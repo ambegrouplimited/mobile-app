@@ -35,6 +35,8 @@ export default function RootLayout() {
             <Stack.Screen name="settings/payment-methods" options={{ headerShown: false }} />
             <Stack.Screen name="settings/payment-methods/catalog" options={{ headerShown: false }} />
             <Stack.Screen name="settings/payment-methods/[id]" options={{ headerShown: false }} />
+            <Stack.Screen name="settings/currency" options={{ headerShown: false }} />
+            <Stack.Screen name="settings/timezone" options={{ headerShown: false }} />
             <Stack.Screen name="settings/messaging-connections" options={{ headerShown: false }} />
             <Stack.Screen name="settings/slack" options={{ headerShown: false }} />
             <Stack.Screen name="settings/security" options={{ headerShown: false }} />

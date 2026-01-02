@@ -26,7 +26,7 @@ export function ReminderSummaryDetails({ data }: { data: ReminderSummaryData }) 
         {data.client.businessName ? (
           <SummaryRow label="Business name" value={data.client.businessName} />
         ) : null}
-        <SummaryRow label="Amount owed" value={data.client.amount || "Not provided"} />
+        <SummaryRow label="Amount owed" value={formatAmountLabel(data.client.amount, data.client.currency)} />
         <SummaryRow label="Due date" value={formatHumanDate(data.client.dueDate ?? "")} />
       </View>
 
@@ -54,6 +54,7 @@ export function ReminderSummaryDetails({ data }: { data: ReminderSummaryData }) 
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Schedule</Text>
+        <SummaryRow label="Timezone" value={data.timezone ?? "UTC"} />
         {renderScheduleSummary(data.schedule)}
       </View>
     </>
@@ -133,6 +134,18 @@ export function formatTimeLabel(value: string) {
   const date = new Date();
   date.setHours(hours, minutes, 0, 0);
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatAmountLabel(value: string, currency?: string) {
+  if (!value) return "Not provided";
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Not provided";
+  }
+  if (/[A-Za-z$€£¥₹₦₽₱₴₭₮₩]/.test(trimmed)) {
+    return trimmed;
+  }
+  return currency ? `${currency} ${trimmed}` : trimmed;
 }
 
 const styles = StyleSheet.create({

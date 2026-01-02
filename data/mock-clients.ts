@@ -2,6 +2,13 @@ export type ClientStatus = "Paid" | "Not Paid" | "Partially Paid";
 
 export type ClientType = "business" | "individual";
 
+export type ClientAmountOption = {
+  id: string;
+  label: string;
+  currency: string;
+  amount: number;
+};
+
 export type ClientListItem = {
   id: string;
   name: string;
@@ -9,6 +16,7 @@ export type ClientListItem = {
   status: ClientStatus;
   detail: string;
   client_type: ClientType;
+  amount_options?: ClientAmountOption[];
 };
 
 export const activeClients: ClientListItem[] = [

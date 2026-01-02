@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -35,12 +36,34 @@ const DASHBOARD_CACHE_KEY = "cache.dashboard.summary";
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("Not Paid");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const displayName = useMemo(() => {
+    if (user?.name?.trim()) {
+      return user.name.trim().split(" ")[0];
+    }
+    if (user?.email?.trim()) {
+      return user.email.trim().split("@")[0];
+    }
+    return "there";
+  }, [user?.name, user?.email]);
+  const avatarUri = (user as { avatarUrl?: string } | undefined)?.avatarUrl;
+  const avatarInitial = useMemo(() => {
+    if (user?.name?.trim()) {
+      return user.name.trim().charAt(0).toUpperCase();
+    }
+    if (user?.email?.trim()) {
+      return user.email.trim().charAt(0).toUpperCase();
+    }
+    return "D";
+  }, [user?.name, user?.email]);
+  const openSettings = useCallback(() => {
+    router.push("/settings");
+  }, [router]);
   const [metricsCurrencyMode, setMetricsCurrencyMode] =
     useState<CurrencyDisplayMode>("display");
 
@@ -221,6 +244,30 @@ export default function DashboardScreen() {
         }
       >
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <View style={styles.greetingRow}>
+          <Pressable
+            style={styles.avatarButton}
+            onPress={openSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
+          >
+            <View style={styles.avatarCircle}>
+              {avatarUri ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.avatarImage}
+                  contentFit="cover"
+                />
+              ) : (
+                <Text style={styles.avatarInitial}>{avatarInitial}</Text>
+              )}
+            </View>
+          </Pressable>
+          <View style={styles.greetingCopy}>
+            <Text style={styles.greetingLabel}>Welcome back</Text>
+            <Text style={styles.greetingName}>{displayName}</Text>
+          </View>
+        </View>
         <View style={styles.summaryControls}>
           <View style={styles.currencySelectorRow}>
             <Text style={styles.currencySelectorLabel}>Show totals in</Text>
@@ -574,6 +621,46 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: Theme.palette.accent,
+  },
+  greetingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.md,
+  },
+  avatarButton: {
+    borderRadius: 28,
+  },
+  avatarCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 24,
+  },
+  avatarInitial: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  greetingCopy: {
+    gap: 2,
+  },
+  greetingLabel: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  greetingName: {
+    fontSize: 24,
+    fontWeight: "600",
+    color: Theme.palette.ink,
   },
   filterPill: {
     flexDirection: "row",

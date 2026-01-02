@@ -1423,6 +1423,12 @@ function toneStyle(tone: string) {
         color: Theme.palette.ink,
         label: "Gentle",
       };
+    case "neutral":
+      return {
+        backgroundColor: "rgba(133, 160, 189, 0.2)",
+        color: Theme.palette.slate,
+        label: "Neutral",
+      };
     case "firm":
       return {
         backgroundColor: "rgba(192, 135, 50, 0.15)",

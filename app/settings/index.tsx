@@ -73,6 +73,13 @@ export default function SettingsScreen() {
     <SafeAreaView style={styles.safe}>
       <ScrollView bounces={true} contentInsetAdjustmentBehavior="automatic">
         <View style={styles.container}>
+          <View style={styles.headerRow}>
+            <Pressable style={styles.backLink} onPress={() => router.back()}>
+              <Feather name="arrow-left" size={22} color={Theme.palette.ink} />
+              <Text style={styles.backLabel}>Dashboard</Text>
+            </Pressable>
+            <Text style={styles.pageTitle}>Settings</Text>
+          </View>
           <View style={styles.profileCard}>
             <View style={styles.avatarCircle}>
               {avatarUri ? (
@@ -181,6 +188,23 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xl,
     gap: Theme.spacing.lg,
     paddingBottom: Theme.spacing.xxxl,
+  },
+  headerRow: {
+    gap: Theme.spacing.sm,
+  },
+  backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  backLabel: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: "600",
+    color: Theme.palette.ink,
   },
   profileCard: {
     alignItems: "center",

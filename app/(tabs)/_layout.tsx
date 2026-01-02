@@ -37,9 +37,9 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="settings"
+        name="messages"
         options={{
-          title: 'Settings',
+          title: 'Messages',
         }}
       />
     </Tabs>

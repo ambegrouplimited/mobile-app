@@ -28,6 +28,7 @@ export type ReminderMessage = {
   sender: "client" | "user";
   text: string;
   timestamp: string;
+  truncated?: boolean;
 };
 
 const reminderRecords: Record<string, ReminderRecord> = {

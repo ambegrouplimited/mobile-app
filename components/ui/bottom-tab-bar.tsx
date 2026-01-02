@@ -11,6 +11,7 @@ const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   index: 'bar-chart-2',
   'new-reminder': 'plus-circle',
   reminders: 'mail',
+  messages: 'message-circle',
   settings: 'settings',
 };
 
@@ -18,6 +19,7 @@ const LABELS: Record<string, string> = {
   index: 'Dashboard',
   'new-reminder': 'New reminder',
   reminders: 'Reminders',
+  messages: 'Messages',
   settings: 'Settings',
 };
 

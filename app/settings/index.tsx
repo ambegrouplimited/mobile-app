@@ -166,6 +166,7 @@ export default function SettingsScreen() {
                 onPress={async () => {
                   setConfirmVisible(false);
                   await logout();
+                  router.replace("/login");
                 }}
               >
                 <Text style={styles.modalButtonText}>Log out</Text>

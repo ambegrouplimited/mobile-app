@@ -29,36 +29,35 @@ export type DashboardMetrics = {
   clients_paid_this_week: number;
 };
 
-export type DashboardPaidInvoice = {
+export type DashboardInvoice = {
   invoice_id: string;
   amount: number;
   amount_usd: number;
   currency: string;
   display_amount: DisplayAmount;
-  paid_at: string;
+  status: string;
+  paid_at?: string | null;
 };
 
 export type PaymentStatus = "paid" | "not_paid" | "partially_paid";
 
 export type DashboardClientSummary = {
   client: Client;
-  total_amount: number;
-  payment_status?: PaymentStatus;
   amounts: AmountBreakdown;
+  invoices: DashboardInvoice[];
+  payment_status?: PaymentStatus;
 };
 
-export type DashboardPaidClient = {
-  client: Client;
-  total_paid: number;
-  amounts: AmountBreakdown;
-  invoices: DashboardPaidInvoice[];
+export type DashboardSection = {
+  title: string;
+  clients: DashboardClientSummary[];
 };
 
 export type DashboardSummary = {
   metrics: DashboardMetrics;
-  active_clients: DashboardClientSummary[];
+  not_paid_clients: DashboardClientSummary[];
   past_clients: DashboardClientSummary[];
-  paid_clients_this_week: DashboardPaidClient[];
+  paid_clients: DashboardClientSummary[];
 };
 
 export function fetchDashboardSummary(token: string) {

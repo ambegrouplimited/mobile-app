@@ -17,15 +17,23 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getContactPlatformInfo } from "@/constants/contact-platforms";
 import { Theme } from "@/constants/theme";
-import { ReminderMessage } from "@/data/mock-reminders";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClientMessages, sendClientMessage } from "@/services/messages";
+import { subscribeToMessageEvents } from "@/lib/message-stream";
 import type { ClientMessage } from "@/types/messages";
 
 const CLIENT_MESSAGES_CACHE_KEY = (clientId: string) =>
   `cache.messages.client.${clientId}`;
 const MESSAGES_LIMIT = 30;
+
+type ChatMessage = {
+  id: string;
+  sender: "user" | "client";
+  text: string;
+  timestamp: string;
+  status?: "pending" | "sent" | "failed";
+};
 
 export default function ClientConversationScreen() {
   const router = useRouter();
@@ -49,7 +57,7 @@ export default function ClientConversationScreen() {
   const canSend = Boolean(contactMethodId && clientId && session?.accessToken);
   const scrollRef = useRef<ScrollView>(null);
   const [composerText, setComposerText] = useState("");
-  const [messages, setMessages] = useState<ReminderMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -59,7 +67,7 @@ export default function ClientConversationScreen() {
     if (!clientId) return;
     let cancelled = false;
     const hydrate = async () => {
-      const cached = await getCachedValue<ReminderMessage[]>(
+      const cached = await getCachedValue<ChatMessage[]>(
         CLIENT_MESSAGES_CACHE_KEY(clientId)
       );
       if (!cancelled && cached?.length) {
@@ -89,7 +97,7 @@ export default function ClientConversationScreen() {
         const mapped = entries.map((entry, index) =>
           buildChatMessage(entry, index)
         );
-        setMessages(mapped);
+        setMessages((prev) => mergeMessages(mapped, prev));
         await setCachedValue(CLIENT_MESSAGES_CACHE_KEY(clientId), mapped);
       } catch (err) {
         setError(
@@ -111,6 +119,26 @@ export default function ClientConversationScreen() {
   }, [loadMessages]);
 
   useEffect(() => {
+    if (!session?.accessToken || !clientId || !contactMethodId) {
+      return;
+    }
+    const conversationKey = getConversationKey(clientId, contactMethodId);
+    const unsubscribe = subscribeToMessageEvents(
+      session.accessToken,
+      (event) => {
+        if (event.conversation_id !== conversationKey || !event.message) {
+          return;
+        }
+        const incoming = buildChatMessageFromEntry(event.message, "stream");
+        setMessages((prev) => upsertMessage(prev, incoming));
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, [session?.accessToken, clientId, contactMethodId]);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollToEnd({ animated: true });
     }
@@ -123,6 +151,16 @@ export default function ClientConversationScreen() {
     }
     setSendError(null);
     setSending(true);
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: ChatMessage = {
+      id: tempId,
+      sender: "user",
+      text: trimmed,
+      timestamp: new Date().toISOString(),
+      status: "pending",
+    };
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setComposerText("");
     try {
       await sendClientMessage(
         {
@@ -132,9 +170,18 @@ export default function ClientConversationScreen() {
         },
         session.accessToken
       );
-      setComposerText("");
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === tempId ? { ...message, status: "sent" } : message
+        )
+      );
       await loadMessages({ showSpinner: false });
     } catch (err) {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === tempId ? { ...message, status: "failed" } : message
+        )
+      );
       setSendError(
         err instanceof Error
           ? err.message
@@ -233,7 +280,11 @@ export default function ClientConversationScreen() {
                     />
                   </View>
                   <Text style={styles.timestamp}>
-                    {formatTimestamp(message.timestamp)}
+                    {message.status === "pending"
+                      ? "Sending…"
+                      : message.status === "failed"
+                      ? "Failed to send"
+                      : formatTimestamp(message.timestamp)}
                   </Text>
                 </View>
               ))
@@ -456,14 +507,21 @@ function formatTimestamp(value: string) {
   });
 }
 
-function buildChatMessage(entry: ClientMessage, index: number): ReminderMessage {
-  const sender: ReminderMessage["sender"] =
+function buildChatMessage(entry: ClientMessage, index: number): ChatMessage {
+  return buildChatMessageFromEntry(entry, String(index));
+}
+
+function buildChatMessageFromEntry(
+  entry: ClientMessage,
+  suffix: string
+): ChatMessage {
+  const sender: ChatMessage["sender"] =
     entry.direction === "outgoing" ? "user" : "client";
   const text = entry.preview ?? entry.body ?? "(No preview available)";
   const id =
     (entry.metadata && (entry.metadata.message_id as string)) ||
     (entry.metadata && (entry.metadata.id as string)) ||
-    `${entry.channel}-${entry.sent_at}-${index}`;
+    `${entry.channel}-${entry.sent_at}-${suffix}`;
   return {
     id,
     sender,
@@ -472,11 +530,81 @@ function buildChatMessage(entry: ClientMessage, index: number): ReminderMessage 
   };
 }
 
+function mergeMessages(fetched: ChatMessage[], previous: ChatMessage[]) {
+  const byId = new Map<string, ChatMessage>();
+  for (const message of previous) {
+    byId.set(message.id, message);
+  }
+  for (const message of fetched) {
+    byId.set(message.id, message);
+  }
+  return sortMessages([...byId.values()]);
+}
+
+function upsertMessage(
+  previous: ChatMessage[],
+  incoming: ChatMessage
+): ChatMessage[] {
+  if (incoming.sender === "user") {
+    const matchIndex = previous.findIndex((message) =>
+      matchesLocalMessage(message, incoming)
+    );
+    if (matchIndex >= 0) {
+      const copy = [...previous];
+      copy[matchIndex] = {
+        ...incoming,
+        status: "sent",
+        id: incoming.id || copy[matchIndex].id,
+      };
+      return sortMessages(copy);
+    }
+  }
+  const existingIndex = previous.findIndex(
+    (message) => message.id === incoming.id
+  );
+  if (existingIndex >= 0) {
+    const copy = [...previous];
+    copy[existingIndex] = {
+      ...copy[existingIndex],
+      ...incoming,
+      status: incoming.status ?? copy[existingIndex].status,
+    };
+    return copy;
+  }
+  return sortMessages([...previous, incoming]);
+}
+
+function sortMessages(messages: ChatMessage[]) {
+  return [...messages].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+}
+
+function matchesLocalMessage(
+  localMessage: ChatMessage,
+  incoming: ChatMessage
+): boolean {
+  if (localMessage.sender !== "user") return false;
+  if (!localMessage.status || localMessage.status === "failed") return false;
+  return normalizeMessageText(localMessage.text) === normalizeMessageText(incoming.text);
+}
+
+function normalizeMessageText(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
 function getParam(value?: string | string[]) {
   if (Array.isArray(value)) {
     return value[0];
   }
   return value;
+}
+
+function getConversationKey(
+  clientId?: string | null,
+  contactMethodId?: string | null
+) {
+  return `${clientId ?? "unknown"}:${contactMethodId ?? "default"}`;
 }
 
 function ExpandableText({

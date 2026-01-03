@@ -10,7 +10,9 @@ export const paymentLogos = {
   revolut: Asset.fromModule(require("@/assets/revolut.svg")).uri,
   wise: Asset.fromModule(require("@/assets/wise.svg")).uri,
   zelle: Asset.fromModule(require("@/assets/zelle.svg")).uri,
-  bank: Asset.fromModule(require("@/assets/ach.png")).uri,
+  ach: Asset.fromModule(require("@/assets/ach.png")).uri,
+  bank: Asset.fromModule(require("@/assets/bank.svg")).uri,
+  crypto: Asset.fromModule(require("@/assets/crypto.svg")).uri,
   iban: Asset.fromModule(require("@/assets/iban.png")).uri,
   n26: Asset.fromModule(require("@/assets/n26.svg")).uri,
   btc: Asset.fromModule(require("@/assets/crypto/btc.svg")).uri,
@@ -280,7 +282,7 @@ export const BASE_PAYMENT_METHODS: PaymentMethodDef[] = [
   },
   {
     id: "ach",
-    logo: "bank",
+    logo: "ach",
     title: "ACH transfer",
     subtitle: "Share US bank routing details.",
     variants: [
@@ -592,7 +594,7 @@ export const BASE_PAYMENT_METHODS: PaymentMethodDef[] = [
         id: "crypto_other",
         label: "Other",
         type: "crypto_other",
-        icon: "bank",
+        icon: "crypto",
         fields: [
           { key: "wallet_address", label: "Wallet address", placeholder: "Enter wallet address", required: true },
           { key: "wallet_network", label: "Network / chain", placeholder: "Network or chain name", required: true },

@@ -3,7 +3,7 @@ import { resolveFractionDigits } from "@/lib/currency";
 import type {
   AmountBreakdown,
   DashboardClientSummary,
-  DashboardPaidClient,
+  DashboardInvoice,
   PaymentStatus,
 } from "@/services/dashboard";
 
@@ -30,67 +30,80 @@ export const PAST_CLIENT_STATUS_META: Record<
 export function buildOutstandingClientRow(
   entry: DashboardClientSummary,
 ): ClientListItem {
-  const { client, total_amount } = entry;
-  const amountOptions = buildAmountOptions(entry.amounts, total_amount);
+  const { client } = entry;
+  const fallbackAmount =
+    entry.amounts?.display_total?.amount ?? entry.amounts?.total_usd ?? 0;
+  const amountOptions = buildAmountOptions(entry.amounts, fallbackAmount);
   const displayAmount = amountOptions[0];
   return {
     id: client.id,
     name: truncateName(client.name),
     amount: displayAmount
       ? formatCurrency(displayAmount.amount, displayAmount.currency)
-      : formatCurrency(total_amount, "USD"),
+      : formatCurrency(fallbackAmount, "USD"),
     status: "Not Paid",
     detail: "Awaiting payment",
     client_type: client.client_type,
     amount_options: amountOptions,
+    meta: {
+      invoiceIds: entry.invoices?.map((invoice) => invoice.invoice_id),
+    },
   };
 }
 
 export function buildPastClientRow(
   entry: DashboardClientSummary,
 ): ClientListItem {
-  const { client, total_amount } = entry;
-  const paymentStatus = entry.payment_status ?? "paid";
+  const { client } = entry;
+  const paymentStatus = resolvePastPaymentStatus(entry);
   const statusMeta = PAST_CLIENT_STATUS_META[paymentStatus];
-  const amountOptions = buildAmountOptions(entry.amounts, total_amount);
+  const fallbackAmount =
+    entry.amounts?.display_total?.amount ?? entry.amounts?.total_usd ?? 0;
+  const amountOptions = buildAmountOptions(entry.amounts, fallbackAmount);
   const displayAmount = amountOptions[0];
   return {
     id: client.id,
     name: truncateName(client.name),
     amount: displayAmount
       ? formatCurrency(displayAmount.amount, displayAmount.currency)
-      : formatCurrency(total_amount, "USD"),
+      : formatCurrency(fallbackAmount, "USD"),
     status: statusMeta.status,
     detail: statusMeta.detail,
     client_type: client.client_type,
     amount_options: amountOptions,
+    meta: {
+      invoiceIds: entry.invoices?.map((invoice) => invoice.invoice_id),
+    },
   };
 }
 
 export function buildPaidClientRow(
-  entry: DashboardPaidClient
+  entry: DashboardClientSummary
 ): ClientListItem {
   const latestPaid = entry.invoices
     .map((invoice) => invoice.paid_at)
     .filter((date): date is string => Boolean(date))
     .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
-  const detail = `${entry.invoices.length} invoice${
-    entry.invoices.length === 1 ? "" : "s"
-  } · ${
-    latestPaid ? `Paid ${formatDateShort(latestPaid)}` : "Settled this week"
+  const invoiceCount = entry.invoices?.length ?? 0;
+  const detail = `${invoiceCount} invoice${invoiceCount === 1 ? "" : "s"}${
+    latestPaid ? ` · Paid ${formatDateShort(latestPaid)}` : ""
   }`;
-  const amountOptions = buildAmountOptions(entry.amounts, entry.total_paid);
+  const total = entry.amounts?.display_total?.amount ?? entry.amounts?.total_usd ?? 0;
+  const amountOptions = buildAmountOptions(entry.amounts, total);
   const displayAmount = amountOptions[0];
   return {
     id: entry.client.id,
     name: truncateName(entry.client.name),
     amount: displayAmount
       ? formatCurrency(displayAmount.amount, displayAmount.currency)
-      : formatCurrency(entry.total_paid, "USD"),
+      : formatCurrency(total, "USD"),
     status: "Paid",
     detail,
     client_type: entry.client.client_type,
     amount_options: amountOptions,
+    meta: {
+      invoiceIds: entry.invoices?.map((invoice) => invoice.invoice_id),
+    },
   };
 }
 
@@ -136,6 +149,39 @@ function formatDateShort(iso?: string | null) {
     month: "short",
     day: "numeric",
   });
+}
+
+function resolvePastPaymentStatus(
+  entry: DashboardClientSummary,
+): PaymentStatus {
+  if (entry.payment_status) {
+    return entry.payment_status;
+  }
+  return determineStatusFromInvoices(entry.invoices);
+}
+
+function determineStatusFromInvoices(
+  invoices?: DashboardInvoice[],
+): PaymentStatus {
+  if (!invoices?.length) {
+    return "paid";
+  }
+  let hasPaid = false;
+  let hasUnpaid = false;
+  for (const invoice of invoices) {
+    if (invoice.status === "paid") {
+      hasPaid = true;
+    } else {
+      hasUnpaid = true;
+    }
+    if (hasPaid && hasUnpaid) {
+      return "partially_paid";
+    }
+  }
+  if (hasUnpaid) {
+    return "not_paid";
+  }
+  return "paid";
 }
 
 function buildAmountOptions(

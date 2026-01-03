@@ -8,7 +8,6 @@ import { reminderDetails } from "@/data/mock-reminders";
 
 const actions = [
   { icon: "refresh-cw", title: "Past deliveries", detail: "History & delivery status", href: "/reminders/[id]/history" },
-  { icon: "message-circle", title: "Messages", detail: "Email threads & replies", href: "/reminders/[id]/messages" },
   { icon: "file-text", title: "Reminder summary", detail: "Tone, schedule, payment", href: "/reminders/[id]/summary" },
 ] as const;
 

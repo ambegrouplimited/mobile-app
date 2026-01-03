@@ -33,16 +33,31 @@ export default function NotPaidClientsScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeClients, setActiveClients] = useState<DashboardClientSummary[]>(
-    []
+  const [notPaidClients, setNotPaidClients] = useState<
+    DashboardClientSummary[]
+  >([]);
+  const handleClientPress = useCallback(
+    (clientId: string, meta?: { invoiceIds?: string[] }) => {
+      const invoiceParam =
+        meta?.invoiceIds && meta.invoiceIds.length
+          ? { invoiceIds: meta.invoiceIds.join(",") }
+          : undefined;
+      router.push({
+        pathname: `/client/${clientId}`,
+        params: invoiceParam,
+      });
+    },
+    [router]
   );
 
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      const cached = await getCachedValue<DashboardSummary>(DASHBOARD_CACHE_KEY);
-      if (!cancelled && cached?.active_clients) {
-        setActiveClients(cached.active_clients);
+      const cached = await getCachedValue<DashboardSummary>(
+        DASHBOARD_CACHE_KEY
+      );
+      if (!cancelled && cached?.not_paid_clients) {
+        setNotPaidClients(cached.not_paid_clients);
       }
     };
     hydrate();
@@ -55,7 +70,7 @@ export default function NotPaidClientsScreen() {
     async (options?: { isRefreshing?: boolean }) => {
       if (!session?.accessToken) {
         setError("Sign in again to review outstanding clients.");
-        setActiveClients([]);
+        setNotPaidClients([]);
         return;
       }
       if (options?.isRefreshing) {
@@ -66,7 +81,7 @@ export default function NotPaidClientsScreen() {
       setError(null);
       try {
         const summary = await fetchDashboardSummary(session.accessToken);
-        setActiveClients(summary.active_clients);
+        setNotPaidClients(summary.not_paid_clients);
         await setCachedValue(DASHBOARD_CACHE_KEY, summary);
       } catch (err) {
         setError(
@@ -90,9 +105,9 @@ export default function NotPaidClientsScreen() {
   }, [loadClients]);
 
   const filteredActive = useMemo(() => {
-    if (!search.trim()) return activeClients;
+    if (!search.trim()) return notPaidClients;
     const query = search.trim().toLowerCase();
-    return activeClients.filter((entry) => {
+    return notPaidClients.filter((entry) => {
       const { client } = entry;
       const fields = [
         client.name,
@@ -101,7 +116,7 @@ export default function NotPaidClientsScreen() {
       ];
       return fields.some((value) => value?.toLowerCase().includes(query));
     });
-  }, [activeClients, search]);
+  }, [notPaidClients, search]);
 
   const clientRows = useMemo<ClientListItem[]>(() => {
     return filteredActive.map((entry) => buildOutstandingClientRow(entry));
@@ -152,7 +167,7 @@ export default function NotPaidClientsScreen() {
           clients={clientRows}
           totalCount={clientRows.length}
           loading={loading && !refreshing}
-          onPress={(id) => router.push(`/client/${id}`)}
+          onPress={handleClientPress}
         />
       </ScrollView>
     </SafeAreaView>

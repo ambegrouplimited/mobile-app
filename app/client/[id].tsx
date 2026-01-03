@@ -65,7 +65,11 @@ type InvoiceActionMode = "markPaid" | "markUnpaid" | "pause" | "resume";
 
 export default function ClientDetailScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: rawId, invoiceIds } = useLocalSearchParams<{
+    id: string | string[];
+    invoiceIds?: string | string[];
+  }>();
+  const id = getParam(rawId);
   const { session, user } = useAuth();
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(false);
@@ -82,6 +86,17 @@ export default function ClientDetailScreen() {
   const [rescheduleSelection, setRescheduleSelection] = useState<ReminderScheduleSelection | null>(null);
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
   const [rescheduleError, setRescheduleError] = useState<string | null>(null);
+  const invoiceIdsParam = invoiceIds;
+  const invoiceFilter = useMemo(() => {
+    const raw = getParam(invoiceIdsParam);
+    if (!raw) return [];
+    return raw.split(",").map((value) => value.trim()).filter(Boolean);
+  }, [invoiceIdsParam]);
+  const visibleInvoices = useMemo(() => {
+    if (!invoiceFilter.length) return invoices;
+    const set = new Set(invoiceFilter);
+    return invoices.filter((invoice) => set.has(invoice.id));
+  }, [invoiceFilter, invoices]);
   const fallbackTimezone =
     user?.default_timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
   const [rescheduleTimezone, setRescheduleTimezone] = useState<string | null>(null);
@@ -431,12 +446,12 @@ export default function ClientDetailScreen() {
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Reminders</Text>
-          {invoices.length === 0 ? (
+          {visibleInvoices.length === 0 ? (
             <Text style={styles.emptyDetail}>
               No reminders on record for this client.
             </Text>
           ) : (
-            invoices.map((invoice) => {
+            visibleInvoices.map((invoice) => {
               const isPaid = invoice.status === "paid";
               const isPaused = invoice.status === "paused";
               const canPauseResume = invoice.status !== "paid" && invoice.status !== "overdue";
@@ -2126,3 +2141,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
+
+function getParam(value?: string | string[]) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}

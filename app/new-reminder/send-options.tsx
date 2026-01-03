@@ -123,8 +123,9 @@ export default function SendOptionsScreen() {
     (persistedParams.mode as DispatchMode) ?? (proxySupported.has(platform) ? "proxy" : "self"),
   );
   const [modalVisible, setModalVisible] = useState(false);
+  const clientName = (persistedParams.client ?? "").trim();
   const [contactLabel, setContactLabel] = useState(
-    persistedParams.contactLabel || `${platformMeta[platform].label} contact`,
+    persistedParams.contactLabel || buildContactLabelDefault(platform, clientName),
   );
   const [contactEmail, setContactEmail] = useState(persistedParams.contact ?? "");
   const [contactPhone, setContactPhone] = useState(persistedParams.contactPhone ?? "");
@@ -1002,8 +1003,9 @@ export default function SendOptionsScreen() {
                 });
                 setContactLabel((prev) => {
                   if (persistedParams.contactLabel) return prev;
-                  const previousDefault = `${platformMeta[currentPlatform].label} contact`;
-                  return prev === previousDefault ? `${platformMeta[next].label} contact` : prev;
+                  const previousDefault = buildContactLabelDefault(currentPlatform, clientName);
+                  const nextDefault = buildContactLabelDefault(next, clientName);
+                  return prev === previousDefault ? nextDefault : prev;
                 });
               }}
             >
@@ -1137,16 +1139,16 @@ export default function SendOptionsScreen() {
               <Text style={styles.modalSubtitle}>
                 DueSoon needs the client’s contact details for {platformLabel} before scheduling the reminder.
               </Text>
-            <Text style={styles.fieldLabel}>Contact label</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={`${platformLabel} contact`}
-              value={contactLabel}
-              onChangeText={(text) => {
-                setContactError(null);
-                setContactLabel(text);
-              }}
-            />
+              <Text style={styles.fieldLabel}>Contact label</Text>
+              <TextInput
+                style={styles.input}
+                placeholder={buildContactLabelDefault(platform, clientName)}
+                value={contactLabel}
+                onChangeText={(text) => {
+                  setContactError(null);
+                  setContactLabel(text);
+                }}
+              />
             {renderContactFields()}
             {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
             <View style={styles.modalActions}>
@@ -1302,6 +1304,14 @@ function normalizeParams(params: Record<string, string | string[]>) {
     }
   });
   return result;
+}
+
+function buildContactLabelDefault(platform: PlatformId, clientName?: string) {
+  const trimmed = clientName?.trim();
+  if (trimmed) {
+    return `${trimmed} contact`;
+  }
+  return `${platformMeta[platform].label} contact`;
 }
 
 const styles = StyleSheet.create({

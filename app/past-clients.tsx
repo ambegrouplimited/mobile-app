@@ -34,6 +34,19 @@ export default function PastClientsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pastClients, setPastClients] = useState<DashboardClientSummary[]>([]);
+  const handleClientPress = useCallback(
+    (clientId: string, meta?: { invoiceIds?: string[] }) => {
+      const invoiceParam =
+        meta?.invoiceIds && meta.invoiceIds.length
+          ? { invoiceIds: meta.invoiceIds.join(",") }
+          : undefined;
+      router.push({
+        pathname: `/client/${clientId}`,
+        params: invoiceParam,
+      });
+    },
+    [router]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -152,7 +165,7 @@ export default function PastClientsScreen() {
           clients={clientRows}
           totalCount={clientRows.length}
           loading={loading && !refreshing}
-          onPress={(id) => router.push(`/client/${id}`)}
+          onPress={handleClientPress}
         />
       </ScrollView>
     </SafeAreaView>

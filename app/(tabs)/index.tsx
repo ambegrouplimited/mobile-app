@@ -64,6 +64,19 @@ export default function DashboardScreen() {
   const openSettings = useCallback(() => {
     router.push("/settings");
   }, [router]);
+  const navigateToClient = useCallback(
+    (clientId: string, meta?: { invoiceIds?: string[] }) => {
+      const invoiceParam =
+        meta?.invoiceIds && meta.invoiceIds.length
+          ? { invoiceIds: meta.invoiceIds.join(",") }
+          : undefined;
+      router.push({
+        pathname: `/client/${clientId}`,
+        params: invoiceParam,
+      });
+    },
+    [router]
+  );
   const [metricsCurrencyMode, setMetricsCurrencyMode] =
     useState<CurrencyDisplayMode>("display");
 
@@ -119,8 +132,8 @@ export default function DashboardScreen() {
     const candidates = [
       summary?.metrics?.total_outstanding?.display?.currency,
       summary?.metrics?.total_paid_this_week?.display?.currency,
-      summary?.active_clients?.[0]?.amounts?.display_total?.currency,
-      summary?.paid_clients_this_week?.[0]?.amounts?.display_total?.currency,
+      summary?.not_paid_clients?.[0]?.amounts?.display_total?.currency,
+      summary?.paid_clients?.[0]?.amounts?.display_total?.currency,
       summary?.past_clients?.[0]?.amounts?.display_total?.currency,
     ]
       .map((code) => code?.toUpperCase())
@@ -170,8 +183,8 @@ export default function DashboardScreen() {
   }, [summary, metricsCurrencyMode]);
 
   const unpaidClients = useMemo<ClientListItem[]>(() => {
-    if (!summary) return [];
-    return summary.active_clients.map((entry) =>
+    if (!summary?.not_paid_clients) return [];
+    return summary.not_paid_clients.map((entry) =>
       buildOutstandingClientRow(entry)
     );
   }, [summary]);
@@ -182,8 +195,8 @@ export default function DashboardScreen() {
   const unpaidCount = unpaidClients.length;
 
   const paidClients = useMemo<ClientListItem[]>(() => {
-    if (!summary) return [];
-    return summary.paid_clients_this_week.map((entry) =>
+    if (!summary?.paid_clients) return [];
+    return summary.paid_clients.map((entry) =>
       buildPaidClientRow(entry)
     );
   }, [summary]);
@@ -330,7 +343,7 @@ export default function DashboardScreen() {
               : undefined
           }
           loading={loading && !refreshing && !summary}
-          onPress={(id) => router.push(`/client/${id}`)}
+          onPress={navigateToClient}
         />
         <ClientList
           title="Past clients"
@@ -340,7 +353,7 @@ export default function DashboardScreen() {
           onAction={showPastClientsSeeAll ? handleSeeAllPastClients : undefined}
           muted
           loading={loading && !refreshing && !summary}
-          onPress={(id) => router.push(`/client/${id}`)}
+          onPress={navigateToClient}
         />
       </ScrollView>
     </SafeAreaView>
@@ -365,7 +378,10 @@ export function ClientList({
   title: string;
   clients: ClientListItem[];
   muted?: boolean;
-  onPress?: (id: string) => void;
+  onPress?: (
+    id: string,
+    meta?: { invoiceParams?: Record<string, string> }
+  ) => void;
   loading?: boolean;
   actionLabel?: string;
   onAction?: () => void;
@@ -459,7 +475,7 @@ export function ClientList({
             <Pressable
               key={client.id}
               style={styles.clientRow}
-              onPress={() => onPress?.(client.id)}
+              onPress={() => onPress?.(client.id, client.meta)}
             >
               <View style={styles.clientText}>
                 <View style={styles.clientNameRow}>

@@ -17,6 +17,9 @@ export type ClientListItem = {
   detail: string;
   client_type: ClientType;
   amount_options?: ClientAmountOption[];
+  meta?: {
+    invoiceIds?: string[];
+  };
 };
 
 export const activeClients: ClientListItem[] = [

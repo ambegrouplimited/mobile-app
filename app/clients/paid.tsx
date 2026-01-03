@@ -19,7 +19,7 @@ import { buildPaidClientRow } from "@/lib/dashboard-clients";
 import { useAuth } from "@/providers/auth-provider";
 import {
   fetchDashboardSummary,
-  type DashboardPaidClient,
+  type DashboardClientSummary,
   type DashboardSummary,
 } from "@/services/dashboard";
 import { ClientList } from "../(tabs)/index";
@@ -33,14 +33,29 @@ export default function PaidClientsScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [paidClients, setPaidClients] = useState<DashboardPaidClient[]>([]);
+  const [paidClients, setPaidClients] = useState<DashboardClientSummary[]>([]);
+  const handleClientPress = useCallback(
+    (clientId: string, meta?: { invoiceIds?: string[] }) => {
+      const invoiceParam =
+        meta?.invoiceIds && meta.invoiceIds.length
+          ? { invoiceIds: meta.invoiceIds.join(",") }
+          : undefined;
+      router.push({
+        pathname: `/client/${clientId}`,
+        params: invoiceParam,
+      });
+    },
+    [router]
+  );
 
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      const cached = await getCachedValue<DashboardSummary>(DASHBOARD_CACHE_KEY);
-      if (!cancelled && cached?.paid_clients_this_week) {
-        setPaidClients(cached.paid_clients_this_week);
+      const cached = await getCachedValue<DashboardSummary>(
+        DASHBOARD_CACHE_KEY
+      );
+      if (!cancelled && cached?.paid_clients) {
+        setPaidClients(cached.paid_clients);
       }
     };
     hydrate();
@@ -64,7 +79,7 @@ export default function PaidClientsScreen() {
       setError(null);
       try {
         const summary = await fetchDashboardSummary(session.accessToken);
-        setPaidClients(summary.paid_clients_this_week);
+        setPaidClients(summary.paid_clients);
         await setCachedValue(DASHBOARD_CACHE_KEY, summary);
       } catch (err) {
         setError(
@@ -151,7 +166,7 @@ export default function PaidClientsScreen() {
           clients={clientRows}
           totalCount={clientRows.length}
           loading={loading && !refreshing}
-          onPress={(id) => router.push(`/client/${id}`)}
+          onPress={handleClientPress}
         />
       </ScrollView>
     </SafeAreaView>

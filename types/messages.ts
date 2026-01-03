@@ -43,3 +43,12 @@ export type MessageSendResponse = {
   delivered: boolean;
   metadata?: Record<string, unknown>;
 };
+
+export type MessageStreamEvent = {
+  type: string;
+  conversation_id: string;
+  client_id: string;
+  contact_method_id?: string | null;
+  timestamp: string;
+  message?: ClientMessage;
+};

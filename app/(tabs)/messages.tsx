@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,6 +19,7 @@ import { Theme } from "@/constants/theme";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchConversationSummaries } from "@/services/messages";
+import { subscribeToMessageEvents } from "@/lib/message-stream";
 import type { ConversationSummary } from "@/types/messages";
 
 const CONVERSATION_CACHE_KEY = "cache.messages.conversations";
@@ -29,6 +31,7 @@ export default function MessagesScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +86,21 @@ export default function MessagesScreen() {
     loadConversations();
   }, [loadConversations]);
 
+  useEffect(() => {
+    if (!session?.accessToken) {
+      return;
+    }
+    const unsubscribe = subscribeToMessageEvents(
+      session.accessToken,
+      () => {
+        loadConversations({ showSpinner: false });
+      }
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, [session?.accessToken, loadConversations]);
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadConversations({ showSpinner: false });
@@ -104,6 +122,25 @@ export default function MessagesScreen() {
     [router]
   );
 
+  const filteredConversations = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) {
+      return conversations;
+    }
+    return conversations.filter((conversation) => {
+      const payload = [
+        conversation.client_name,
+        conversation.contact_label,
+        conversation.channel,
+        conversation.last_message.subject ?? "",
+        conversation.last_message.preview ?? "",
+      ];
+      return payload.some((value) =>
+        value?.toLowerCase().includes(query)
+      );
+    });
+  }, [conversations, search]);
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
@@ -121,16 +158,28 @@ export default function MessagesScreen() {
           Latest messages across all channels.
         </Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <View style={styles.searchField}>
+          <Feather name="search" size={16} color={Theme.palette.slate} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search by name, channel, or message"
+            placeholderTextColor={Theme.palette.slateSoft}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
         <View style={styles.list}>
           {loading && !conversations.length ? (
             <View style={styles.loadingState}>
               <ActivityIndicator color={Theme.palette.slate} />
               <Text style={styles.loadingLabel}>Loading conversations…</Text>
             </View>
-          ) : conversations.length === 0 ? (
+          ) : !filteredConversations.length ? (
             <Text style={styles.emptyState}>No messages just yet.</Text>
           ) : (
-            conversations.map((conversation) => (
+            filteredConversations.map((conversation) => (
               <ConversationRow
                 key={`${conversation.client_id}-${conversation.contact_method_id}`}
                 conversation={conversation}
@@ -220,6 +269,22 @@ const styles = StyleSheet.create({
   pageSubtitle: {
     fontSize: 15,
     color: Theme.palette.slate,
+  },
+  searchField: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: Theme.radii.lg,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    gap: Theme.spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: Theme.palette.ink,
   },
   list: {
     gap: Theme.spacing.md,

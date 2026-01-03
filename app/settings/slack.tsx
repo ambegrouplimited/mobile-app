@@ -1,9 +1,10 @@
+import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as AuthSession from "expo-auth-session";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
@@ -68,6 +69,7 @@ export default function SlackDetailsScreen() {
   const [loading, setLoading] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadStatus = useCallback(async () => {
     if (!session?.accessToken) {
@@ -186,12 +188,27 @@ export default function SlackDetailsScreen() {
     return `${selectedWorkspace.team_name ?? selectedWorkspace.team_id}`;
   }, [selectedWorkspace]);
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadStatus();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadStatus]);
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Theme.palette.ink} />
+        }
+      >
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()}>
-            <Text style={styles.backLink}>Back</Text>
+          <Pressable style={styles.backLink} onPress={() => router.back()}>
+            <Feather name="arrow-left" size={22} color={Theme.palette.ink} />
+            <Text style={styles.backLabel}>Messaging connections</Text>
           </Pressable>
           <Text style={styles.title}>Slack workspaces</Text>
           <Text style={styles.subtitle}>
@@ -201,9 +218,6 @@ export default function SlackDetailsScreen() {
           </Text>
         </View>
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Pressable style={styles.refreshButton} onPress={loadStatus} disabled={loading}>
-          <Text style={styles.refreshText}>{loading ? "Refreshing..." : "Refresh"}</Text>
-        </Pressable>
         <Pressable style={styles.connectButton} onPress={connectWorkspace} disabled={loading}>
           <Text style={styles.connectButtonText}>Connect new workspace</Text>
         </Pressable>
@@ -295,8 +309,13 @@ const styles = StyleSheet.create({
     gap: Theme.spacing.xs,
   },
   backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
+  backLabel: {
     fontSize: 14,
-    color: Theme.palette.accent,
+    color: Theme.palette.slate,
   },
   title: {
     fontSize: 22,
@@ -308,18 +327,6 @@ const styles = StyleSheet.create({
   },
   error: {
     color: "#B3261E",
-  },
-  refreshButton: {
-    alignSelf: "flex-start",
-    paddingHorizontal: Theme.spacing.md,
-    paddingVertical: Theme.spacing.sm,
-    borderRadius: Theme.radii.md,
-    borderWidth: 1,
-    borderColor: Theme.palette.border,
-  },
-  refreshText: {
-    fontWeight: "600",
-    color: Theme.palette.ink,
   },
   connectButton: {
     alignSelf: "flex-start",

@@ -1105,9 +1105,10 @@ export default function SendOptionsScreen() {
         </View>
 
         <Pressable
-          style={[
+          style={({ pressed }) => [
             styles.primaryButton,
             (!connectionReady || savingClient) && styles.primaryButtonDisabled,
+            pressed && connectionReady && styles.primaryButtonPressed,
           ]}
           disabled={!connectionReady}
           onPress={async () => {
@@ -1153,7 +1154,10 @@ export default function SendOptionsScreen() {
             {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
             <View style={styles.modalActions}>
               <Pressable
-                style={styles.modalButtonMuted}
+                style={({ pressed }) => [
+                  styles.modalButtonMuted,
+                  pressed && styles.modalButtonMutedPressed,
+                ]}
                 onPress={async () => {
                   await Haptics.selectionAsync();
                   setModalVisible(false);
@@ -1162,7 +1166,11 @@ export default function SendOptionsScreen() {
                 <Text style={styles.modalButtonMutedText}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.modalButton, savingClient && styles.modalButtonDisabled]}
+                style={({ pressed }) => [
+                  styles.modalButton,
+                  savingClient && styles.modalButtonDisabled,
+                  pressed && !savingClient && styles.modalButtonPressed,
+                ]}
                 disabled={savingClient}
                 onPress={async () => {
                   await Haptics.selectionAsync();
@@ -1479,6 +1487,9 @@ const styles = StyleSheet.create({
     borderRadius: Theme.radii.md,
     backgroundColor: Theme.palette.slate,
   },
+  primaryButtonPressed: {
+    backgroundColor: Theme.palette.ink,
+  },
   primaryButtonDisabled: {
     opacity: 0.5,
   },
@@ -1624,6 +1635,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: Theme.palette.border,
     marginTop: Theme.spacing.sm,
+    borderRadius: Theme.radii.lg,
+    overflow: "hidden",
   },
   modalButtonMuted: {
     flex: 1,
@@ -1632,6 +1645,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRightWidth: 1,
     borderColor: Theme.palette.border,
+  },
+  modalButtonMutedPressed: {
+    backgroundColor: Theme.palette.surface,
   },
   modalButtonMutedText: {
     fontSize: 15,
@@ -1643,6 +1659,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: Theme.palette.slate,
+  },
+  modalButtonPressed: {
+    backgroundColor: Theme.palette.ink,
   },
   modalButtonDisabled: {
     opacity: 0.65,

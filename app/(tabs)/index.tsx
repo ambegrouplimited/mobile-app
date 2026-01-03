@@ -552,9 +552,10 @@ function CurrencyDropdown({
   return (
     <>
       <Pressable
-        style={[
+        style={({ pressed }) => [
           buttonStyle,
           !canToggle && styles.currencyDropdownButtonDisabled,
+          pressed && canToggle && styles.currencyDropdownButtonPressed,
         ]}
         onPress={() => (canToggle ? setVisible(true) : undefined)}
         hitSlop={8}
@@ -583,9 +584,10 @@ function CurrencyDropdown({
               return (
                 <Pressable
                   key={option.value}
-                  style={[
+                  style={({ pressed }) => [
                     styles.currencyDropdownOption,
                     active && styles.currencyDropdownOptionActive,
+                    pressed && styles.currencyDropdownOptionPressed,
                   ]}
                   onPress={() => handleSelect(option.value)}
                 >
@@ -885,6 +887,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Theme.spacing.sm,
     paddingVertical: Theme.spacing.xs,
     backgroundColor: Theme.palette.surface,
+    overflow: "hidden",
+  },
+  currencyDropdownButtonPressed: {
+    backgroundColor: "rgba(28, 31, 35, 0.06)",
   },
   currencyDropdownButtonDisabled: {
     opacity: 0.6,
@@ -903,6 +909,7 @@ const styles = StyleSheet.create({
     borderColor: Theme.palette.border,
     paddingHorizontal: Theme.spacing.xs,
     paddingVertical: 2,
+    overflow: "hidden",
   },
   currencyDropdownTextInline: {
     fontSize: 12,
@@ -923,6 +930,7 @@ const styles = StyleSheet.create({
     width: 200,
     borderWidth: 1,
     borderColor: Theme.palette.border,
+    overflow: "hidden",
   },
   currencyDropdownOption: {
     paddingVertical: Theme.spacing.sm,
@@ -930,6 +938,9 @@ const styles = StyleSheet.create({
   },
   currencyDropdownOptionActive: {
     backgroundColor: Theme.palette.surface,
+  },
+  currencyDropdownOptionPressed: {
+    backgroundColor: "rgba(28, 31, 35, 0.08)",
   },
   currencyDropdownOptionText: {
     fontSize: 15,

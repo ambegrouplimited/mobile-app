@@ -3,7 +3,7 @@ import * as AuthSession from "expo-auth-session";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import * as Linking from "expo-linking";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -238,6 +238,11 @@ export default function MessagingConnectionsScreen() {
   useEffect(() => {
     loadSlackStatus();
   }, [loadSlackStatus]);
+  useFocusEffect(
+    useCallback(() => {
+      loadSlackStatus();
+    }, [loadSlackStatus]),
+  );
 
   const loadTelegramStatus = useCallback(async () => {
     if (!session?.accessToken) {
@@ -356,6 +361,10 @@ export default function MessagingConnectionsScreen() {
       return;
     }
     if (connections[id]) {
+      if (id === "slack") {
+        router.push("/settings/slack");
+        return;
+      }
       const platformInfo = CONTACT_PLATFORM_INFO[id];
       setConfirmDisconnect({ id, label: platformInfo?.label ?? id });
       return;
@@ -662,14 +671,6 @@ export default function MessagingConnectionsScreen() {
                   >
                     {platform.connected ? "Connected" : "Not connected"}
                   </Text>
-                  {platform.id === "slack" && platform.connected ? (
-                    <Pressable
-                      style={styles.detailsLink}
-                      onPress={() => router.push("/settings/slack")}
-                    >
-                      <Text style={styles.detailsLinkText}>Browse Slack</Text>
-                    </Pressable>
-                  ) : null}
                   <Pressable
                     onPress={() => toggleConnection(platform.id)}
                     disabled={busy[platform.id]}
@@ -822,12 +823,6 @@ export default function MessagingConnectionsScreen() {
                       setConnections((prev) => ({ ...prev, outlook: false }));
                       setOutlookStatus({ connected: false });
                       await setCachedValue(OUTLOOK_STATUS_CACHE_KEY, { connected: false });
-                    } else if (id === "slack") {
-                      await disconnectChannel(id, session.accessToken);
-                      await updateUserProfile({ channels: { slack: false } });
-                      setConnections((prev) => ({ ...prev, slack: false }));
-                      setSlackStatus({ workspaces: [] });
-                      await setCachedValue(SLACK_STATUS_CACHE_KEY, { workspaces: [] });
                     } else if (id === "telegram") {
                       await disconnectTelegram(session.accessToken);
                       await updateUserProfile({ channels: { telegram: false } });

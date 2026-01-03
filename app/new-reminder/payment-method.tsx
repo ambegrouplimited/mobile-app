@@ -198,16 +198,16 @@ export default function ReminderPaymentMethodScreen() {
 
     return (
       <View style={styles.card}>
-        {items.map((method, index) => {
+        {items.map((method) => {
           const active = method.id === selectedId;
           return (
             <Pressable
               key={method.id}
               onPress={() => setSelectedId(method.id)}
-              style={[
+              style={({ pressed }) => [
                 styles.methodRow,
-                index === items.length - 1 && styles.rowLast,
                 active && styles.methodRowActive,
+                pressed && styles.methodRowPressed,
               ]}
             >
               <View style={styles.methodInfo}>
@@ -367,6 +367,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     padding: Theme.spacing.lg,
     gap: Theme.spacing.md,
+    overflow: "hidden",
   },
   methodRow: {
     flexDirection: "row",
@@ -375,12 +376,15 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.md,
     borderBottomWidth: 1,
     borderColor: Theme.palette.border,
+    overflow: "hidden",
   },
   methodRowActive: {
     backgroundColor: "rgba(77, 94, 114, 0.08)",
+    borderRadius: Theme.radii.md,
   },
-  rowLast: {
-    borderBottomWidth: 0,
+  methodRowPressed: {
+    backgroundColor: "rgba(77, 94, 114, 0.12)",
+    borderRadius: Theme.radii.md,
   },
   methodInfo: {
     flexDirection: "row",

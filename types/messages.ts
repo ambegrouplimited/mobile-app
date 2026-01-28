@@ -52,3 +52,12 @@ export type MessageStreamEvent = {
   timestamp: string;
   message?: ClientMessage;
 };
+
+export type QuickReplySuggestion = {
+  text: string;
+};
+
+export type QuickReplyResponse = {
+  suggestions: QuickReplySuggestion[];
+  cached: boolean;
+};

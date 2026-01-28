@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
@@ -23,6 +23,7 @@ export default function ClientTimezoneScreen() {
   const [error, setError] = useState<string | null>(null);
   const [savingZone, setSavingZone] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [confirmation, setConfirmation] = useState<TimezoneInfo | null>(null);
 
   const fallbackTimezone = user?.default_timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
   const currentZone = client?.timezone ?? fallbackTimezone;
@@ -74,15 +75,24 @@ export default function ClientTimezoneScreen() {
     );
   }, [search, timezones]);
 
-  const handleSelect = async (timezone: TimezoneInfo) => {
+  const requestTimezoneChange = (timezone: TimezoneInfo) => {
     if (!id || !session?.accessToken) return;
     if (timezone.name === currentZone || savingZone) return;
+    setConfirmation(timezone);
+  };
+
+  const dismissConfirmation = () => setConfirmation(null);
+
+  const handleConfirmChange = async () => {
+    if (!id || !session?.accessToken || !confirmation) return;
+    const timezone = confirmation;
     setSavingZone(timezone.name);
     setError(null);
     try {
       await Haptics.selectionAsync();
       await updateClient(id, { timezone: timezone.name }, session.accessToken);
       setClient((prev) => (prev ? { ...prev, timezone: timezone.name } : prev));
+      setConfirmation(null);
       router.back();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to update the client timezone.");
@@ -134,7 +144,7 @@ export default function ClientTimezoneScreen() {
                 <Pressable
                   key={timezone.name}
                   style={[styles.row, isActive && styles.rowActive]}
-                  onPress={() => handleSelect(timezone)}
+                  onPress={() => requestTimezoneChange(timezone)}
                   disabled={isSaving}
                 >
                   <View style={styles.rowText}>
@@ -157,6 +167,25 @@ export default function ClientTimezoneScreen() {
           </View>
         )}
       </ScrollView>
+      <Modal animationType="fade" transparent visible={Boolean(confirmation)} onRequestClose={dismissConfirmation}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Update timezone?</Text>
+            <Text style={styles.modalMessage}>
+              Existing invoices keep the timezone they were created with. This change only affects future reminders for
+              this client.
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable style={[styles.modalButton, styles.modalButtonMuted]} onPress={dismissConfirmation}>
+                <Text style={[styles.modalButtonText, styles.modalButtonTextMuted]}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.modalButton} onPress={handleConfirmChange}>
+                <Text style={styles.modalButtonText}>Confirm</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -256,6 +285,52 @@ const styles = StyleSheet.create({
   emptyText: {
     padding: Theme.spacing.md,
     textAlign: "center",
+    color: palette.slate,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#FFFFFF",
+    borderRadius: Theme.radii.lg,
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: palette.ink,
+  },
+  modalMessage: {
+    fontSize: 14,
+    color: palette.slate,
+    lineHeight: 20,
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: Theme.spacing.sm,
+  },
+  modalButton: {
+    paddingHorizontal: Theme.spacing.lg,
+    paddingVertical: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+    backgroundColor: palette.ink,
+  },
+  modalButtonMuted: {
+    backgroundColor: palette.border,
+  },
+  modalButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  modalButtonTextMuted: {
     color: palette.slate,
   },
 });

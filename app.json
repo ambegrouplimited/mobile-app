@@ -1,29 +1,32 @@
 {
   "expo": {
-    "owner": "rasheed",
-    "name": "mobile-app",
-    "slug": "mobile-app",
+    "owner": "commanderoutpost",
+    "name": "Duesoon",
+    "slug": "duesoon",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/duesoonLogo.png",
-    "scheme": "mobileapp",
+    "icon": "./assets/images/duesoonLogoNoText.png",
+    "scheme": "ambeduesoon",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.duesoon.mobileapp",
+      "bundleIdentifier": "com.ambe.duesoon",
       "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
-      "package": "com.duesoon.mobileapp",
+      "package": "com.ambe.duesoon",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE"
-        // "foregroundImage": "./assets/images/android-icon-foreground.png",
-        // "backgroundImage": "./assets/images/android-icon-background.png",
-        // "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
+    },
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#00000000",
+      "translucent": true
     },
     "web": {
       "output": "static",
@@ -32,32 +35,42 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      "@react-native-firebase/app",
       [
         "@react-native-google-signin/google-signin",
         {
-          "iosUrlScheme": "com.googleusercontent.apps.791645126644-s5contt1gb6u1em95b680nf6r8ekcqg8"
+          "iosUrlScheme": "com.googleusercontent.apps.1075208090534-54i2b72ue2g8gjq3inaggg852g0h5iib"
         }
       ],
-      // [
-      //   // "expo-notifications",
-      //   {
-      //     "icon": "./assets/images/duesoonLogo.png",
-      //     "color": "#ffffff"
-      //   }
-      // ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/duesoonLogoNoText.png",
+          "color": "#ffffff"
+        }
+      ],
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/duesoonLogo.png",
+          "image": "./assets/images/duesoonLogoNoText.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker",
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "07ab5c37-8128-4816-8a9c-abf65221a6ca"
+      }
     }
   }
 }

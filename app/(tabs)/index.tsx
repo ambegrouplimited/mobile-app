@@ -24,6 +24,7 @@ import {
   type CurrencyDisplayMode,
   formatCurrency,
 } from "@/lib/dashboard-clients";
+import { SubscriptionIndicator } from "@/components/ui/subscription-indicator";
 import { useAuth } from "@/providers/auth-provider";
 import {
   fetchDashboardSummary,
@@ -278,7 +279,13 @@ export default function DashboardScreen() {
           </Pressable>
           <View style={styles.greetingCopy}>
             <Text style={styles.greetingLabel}>Welcome back</Text>
-            <Text style={styles.greetingName}>{displayName}</Text>
+            <View style={styles.greetingNameRow}>
+              <Text style={styles.greetingName}>{displayName}</Text>
+              <SubscriptionIndicator
+                subscription={user?.subscription}
+                size="small"
+              />
+            </View>
           </View>
         </View>
         <View style={styles.summaryControls}>
@@ -670,6 +677,11 @@ const styles = StyleSheet.create({
   },
   greetingCopy: {
     gap: 2,
+  },
+  greetingNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
   },
   greetingLabel: {
     fontSize: 13,

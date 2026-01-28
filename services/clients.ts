@@ -24,3 +24,10 @@ export function updateClient(id: string, payload: ClientUpdatePayload, token: st
     token,
   });
 }
+
+export function deleteClient(id: string, token: string) {
+  return apiFetch<void>(`/api/clients/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}

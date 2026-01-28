@@ -1,17 +1,17 @@
-import { Platform } from 'react-native';
+import { Platform } from "react-native";
 
 const palette = {
-  ink: '#1C1F23',
-  inkMuted: '#4F5966',
-  slate: '#4D5E72',
-  slateSoft: '#7B8896',
-  accent: '#C08732',
-  success: '#2F6E4F',
-  background: '#FFFFFF',
-  surface: '#F5F6F7',
-  border: '#E4E7EC',
-  darkBackground: '#0F1217',
-  darkSurface: '#151921',
+  ink: "#1C1F23",
+  inkMuted: "#4F5966",
+  slate: "#000",
+  slateSoft: "#7B8896",
+  accent: "#C08732",
+  success: "#2F6E4F",
+  background: "#FFFFFF",
+  surface: "#F5F6F7",
+  border: "#E4E7EC",
+  darkBackground: "#0F1217",
+  darkSurface: "#151921",
 };
 
 export const Palette = palette;
@@ -43,32 +43,33 @@ export const Colors = {
     tabIconSelected: palette.slate,
   },
   dark: {
-    text: '#E1E6EE',
+    text: "#E1E6EE",
     background: palette.darkBackground,
     tint: palette.surface,
-    icon: '#A1A9B6',
-    tabIconDefault: '#7A8394',
-    tabIconSelected: '#FFFFFF',
+    icon: "#A1A9B6",
+    tabIconDefault: "#7A8394",
+    tabIconSelected: "#FFFFFF",
   },
 };
 
 export const Fonts = Platform.select({
   ios: {
-    sans: 'system-ui',
-    serif: 'ui-serif',
-    rounded: 'ui-rounded',
-    mono: 'ui-monospace',
+    sans: "system-ui",
+    serif: "ui-serif",
+    rounded: "ui-rounded",
+    mono: "ui-monospace",
   },
   default: {
-    sans: 'normal',
-    serif: 'serif',
-    rounded: 'normal',
-    mono: 'monospace',
+    sans: "normal",
+    serif: "serif",
+    rounded: "normal",
+    mono: "monospace",
   },
   web: {
     sans: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
     serif: "Georgia, 'Times New Roman', serif",
-    rounded: "'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif",
+    rounded:
+      "'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif",
     mono: "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
   },
 });

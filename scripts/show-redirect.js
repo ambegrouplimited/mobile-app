@@ -27,7 +27,9 @@ function parseArgs() {
     } else if (arg.startsWith("--owner=")) {
       args.owner = arg.split("=")[1];
     } else if (arg === "--help" || arg === "-h") {
-      console.log("Usage: node scripts/show-redirect.js [--native] [--owner=username]");
+      console.log(
+        "Usage: node scripts/show-redirect.js [--native] [--owner=username]",
+      );
       process.exit(0);
     }
   });
@@ -45,7 +47,7 @@ function main() {
   const args = parseArgs();
   const config = readExpoConfig();
   const slug = config.slug || "app";
-  const scheme = config.scheme || "mobileapp";
+  const scheme = config.scheme || "ambeduesoon";
   const owner = args.owner || config.owner;
 
   if (args.native) {

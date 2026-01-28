@@ -11,6 +11,24 @@ export type NotificationSettings = {
   };
 };
 
+export type SubscriptionStatus =
+  | "inactive"
+  | "trialing"
+  | "active"
+  | "expired"
+  | "canceled";
+
+export type SubscriptionInfo = {
+  status: SubscriptionStatus;
+  provider?: "apple" | "google";
+  trial_end?: string | null;
+  current_period_end?: string | null;
+  reminders_used_this_month: number;
+  reminder_limit?: number | null;
+  is_active: boolean;
+  is_trialing: boolean;
+};
+
 export type AuthUser = {
   id: string;
   email: string;
@@ -21,6 +39,7 @@ export type AuthUser = {
   channels?: Record<string, boolean>;
   default_currency?: string;
   default_timezone?: string;
+  subscription?: SubscriptionInfo;
 };
 
 export type TokenResponse = {

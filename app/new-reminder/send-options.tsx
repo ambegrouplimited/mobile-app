@@ -34,12 +34,18 @@ import {
   fetchOutlookStatus,
   OutlookStatus,
 } from "@/services/outlook";
-import { SlackStatus, SlackUser, connectSlackAccount, fetchSlackStatus, fetchSlackUsers } from "@/services/slack";
 import {
-  TelegramContact,
-  TelegramStatus,
+  connectSlackAccount,
+  fetchSlackStatus,
+  fetchSlackUsers,
+  SlackStatus,
+  SlackUser,
+} from "@/services/slack";
+import {
   fetchTelegramContacts,
   fetchTelegramStatus,
+  TelegramContact,
+  TelegramStatus,
 } from "@/services/telegram";
 import type {
   ClientCreatePayload,
@@ -112,7 +118,10 @@ export default function SendOptionsScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const rawParams = useLocalSearchParams<Record<string, string>>();
-  const persistedParams = useMemo(() => normalizeParams(rawParams), [rawParams]);
+  const persistedParams = useMemo(
+    () => normalizeParams(rawParams),
+    [rawParams],
+  );
   const [platform, setPlatform] = useState<PlatformId>(() => {
     return platformMeta[persistedParams.platform as PlatformId]
       ? (persistedParams.platform as PlatformId)
@@ -120,34 +129,62 @@ export default function SendOptionsScreen() {
   });
 
   const [selection, setSelection] = useState<DispatchMode>(
-    (persistedParams.mode as DispatchMode) ?? (proxySupported.has(platform) ? "proxy" : "self"),
+    (persistedParams.mode as DispatchMode) ??
+      (proxySupported.has(platform) ? "proxy" : "self"),
   );
   const [modalVisible, setModalVisible] = useState(false);
   const clientName = (persistedParams.client ?? "").trim();
   const [contactLabel, setContactLabel] = useState(
-    persistedParams.contactLabel || buildContactLabelDefault(platform, clientName),
+    persistedParams.contactLabel ||
+      buildContactLabelDefault(platform, clientName),
   );
-  const [contactEmail, setContactEmail] = useState(persistedParams.contact ?? "");
-  const [contactPhone, setContactPhone] = useState(persistedParams.contactPhone ?? "");
-  const [slackTeamId, setSlackTeamId] = useState(persistedParams.slackTeamId ?? "");
-  const [slackUserId, setSlackUserId] = useState(persistedParams.slackUserId ?? "");
-  const [telegramChatId, setTelegramChatId] = useState(persistedParams.telegramChatId ?? "");
-  const [telegramUsername, setTelegramUsername] = useState(persistedParams.telegramUsername ?? "");
-  const [slackStatusData, setSlackStatusData] = useState<SlackStatus | null>(null);
-  const [slackUsersByWorkspace, setSlackUsersByWorkspace] = useState<Record<string, SlackUser[]>>({});
+  const [contactEmail, setContactEmail] = useState(
+    persistedParams.contact ?? "",
+  );
+  const [contactPhone, setContactPhone] = useState(
+    persistedParams.contactPhone ?? "",
+  );
+  const [slackTeamId, setSlackTeamId] = useState(
+    persistedParams.slackTeamId ?? "",
+  );
+  const [slackUserId, setSlackUserId] = useState(
+    persistedParams.slackUserId ?? "",
+  );
+  const [telegramChatId, setTelegramChatId] = useState(
+    persistedParams.telegramChatId ?? "",
+  );
+  const [telegramUsername, setTelegramUsername] = useState(
+    persistedParams.telegramUsername ?? "",
+  );
+  const [slackStatusData, setSlackStatusData] = useState<SlackStatus | null>(
+    null,
+  );
+  const [slackUsersByWorkspace, setSlackUsersByWorkspace] = useState<
+    Record<string, SlackUser[]>
+  >({});
   const [slackUsers, setSlackUsers] = useState<SlackUser[]>([]);
   const [slackUsersLoading, setSlackUsersLoading] = useState(false);
   const [slackUsersError, setSlackUsersError] = useState<string | null>(null);
   const [slackWorkspaceExpanded, setSlackWorkspaceExpanded] = useState(false);
   const [slackUsersExpanded, setSlackUsersExpanded] = useState(false);
-  const [telegramContacts, setTelegramContacts] = useState<TelegramContact[]>([]);
+  const [telegramContacts, setTelegramContacts] = useState<TelegramContact[]>(
+    [],
+  );
   const [telegramContactsLoading, setTelegramContactsLoading] = useState(false);
-  const [telegramContactsError, setTelegramContactsError] = useState<string | null>(null);
+  const [telegramContactsError, setTelegramContactsError] = useState<
+    string | null
+  >(null);
   const [telegramPickerExpanded, setTelegramPickerExpanded] = useState(false);
-  const slackWorkspaces = useMemo(() => slackStatusData?.workspaces ?? [], [slackStatusData]);
+  const slackWorkspaces = useMemo(
+    () => slackStatusData?.workspaces ?? [],
+    [slackStatusData],
+  );
   const selectedSlackWorkspace = useMemo(() => {
     if (!slackTeamId) return null;
-    return slackWorkspaces.find((workspace) => workspace.team_id === slackTeamId) ?? null;
+    return (
+      slackWorkspaces.find((workspace) => workspace.team_id === slackTeamId) ??
+      null
+    );
   }, [slackTeamId, slackWorkspaces]);
   const selectedSlackUser = useMemo(() => {
     if (!slackUserId) return null;
@@ -157,20 +194,25 @@ export default function SendOptionsScreen() {
   }, [slackUserId, slackTeamId, slackUsers, slackUsersByWorkspace]);
   const selectedTelegramContact = useMemo(() => {
     if (!telegramChatId) return null;
-    return telegramContacts.find((contact) => String(contact.chat_id) === telegramChatId) ?? null;
+    return (
+      telegramContacts.find(
+        (contact) => String(contact.chat_id) === telegramChatId,
+      ) ?? null
+    );
   }, [telegramChatId, telegramContacts]);
   const [contactError, setContactError] = useState<string | null>(null);
   const [savingClient, setSavingClient] = useState(false);
-  const [selectionRequiresConnection, setSelectionRequiresConnection] = useState(
-    selection === "self" && supportsConnection(platform),
+  const [selectionRequiresConnection, setSelectionRequiresConnection] =
+    useState(selection === "self" && supportsConnection(platform));
+  const [connectionState, setConnectionState] = useState<ConnectionState>(
+    () => ({
+      connected: !selectionRequiresConnection,
+      loading: selectionRequiresConnection,
+      busy: false,
+      error: null,
+      meta: null,
+    }),
   );
-  const [connectionState, setConnectionState] = useState<ConnectionState>(() => ({
-    connected: !selectionRequiresConnection,
-    loading: selectionRequiresConnection,
-    busy: false,
-    error: null,
-    meta: null,
-  }));
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
   const draftId = persistedParams.draftId ?? null;
   const baseParams = useMemo(() => {
@@ -192,7 +234,14 @@ export default function SendOptionsScreen() {
       return Boolean(telegramChatId);
     }
     return Boolean(contactEmail.trim());
-  }, [contactEmail, contactPhone, platform, slackTeamId, slackUserId, telegramChatId]);
+  }, [
+    contactEmail,
+    contactPhone,
+    platform,
+    slackTeamId,
+    slackUserId,
+    telegramChatId,
+  ]);
   const paramsForDraft = useMemo(() => {
     const next: Record<string, string> = { ...baseParams };
     next.platform = platform;
@@ -234,11 +283,21 @@ export default function SendOptionsScreen() {
   const metadata = useMemo(
     () => ({
       client_name: baseParams.client || "New reminder",
-      amount_display: formatAmountDisplay(baseParams.amount, baseParams.currency),
+      amount_display: formatAmountDisplay(
+        baseParams.amount,
+        baseParams.currency,
+      ),
       status: hasContactDetails ? "Contact saved" : "Add contact details",
-      next_action: hasContactDetails ? "Attach a payment method." : "Fill in the contact details.",
+      next_action: hasContactDetails
+        ? "Attach a payment method."
+        : "Fill in the contact details.",
     }),
-    [baseParams.amount, baseParams.currency, baseParams.client, hasContactDetails],
+    [
+      baseParams.amount,
+      baseParams.currency,
+      baseParams.client,
+      hasContactDetails,
+    ],
   );
   const handleReturnToReminders = () => {
     router.replace("/reminders");
@@ -306,7 +365,10 @@ export default function SendOptionsScreen() {
           setSlackUsersByWorkspace({});
         } else {
           setSlackTeamId((prev) => {
-            if (prev && workspaces.some((workspace) => workspace.team_id === prev)) {
+            if (
+              prev &&
+              workspaces.some((workspace) => workspace.team_id === prev)
+            ) {
               return prev;
             }
             return workspaces[0]?.team_id ?? "";
@@ -323,7 +385,9 @@ export default function SendOptionsScreen() {
       }
       if (platform === "telegram") {
         const status = await fetchTelegramStatus(session.accessToken);
-        const connected = Boolean(status.has_business_connection && status.connection?.connected);
+        const connected = Boolean(
+          status.has_business_connection && status.connection?.connected,
+        );
         setConnectionState((prev) => ({
           ...prev,
           connected,
@@ -336,25 +400,38 @@ export default function SendOptionsScreen() {
         }
         return;
       }
-      setConnectionState((prev) => ({ ...prev, connected: true, loading: false, error: null }));
+      setConnectionState((prev) => ({
+        ...prev,
+        connected: true,
+        loading: false,
+        error: null,
+      }));
     } catch (err) {
       setConnectionState((prev) => ({
         ...prev,
         connected: false,
         loading: false,
-        error: err instanceof Error ? err.message : "Unable to check connection.",
+        error:
+          err instanceof Error ? err.message : "Unable to check connection.",
       }));
     }
   }, [platform, selectionRequiresConnection, session?.accessToken]);
 
   useEffect(() => {
-    const requiresConnection = selection === "self" && supportsConnection(platform);
+    const requiresConnection =
+      selection === "self" && supportsConnection(platform);
     setSelectionRequiresConnection(requiresConnection);
   }, [selection, platform]);
 
   useEffect(() => {
     if (!selectionRequiresConnection) {
-      setConnectionState({ connected: true, loading: false, busy: false, error: null, meta: null });
+      setConnectionState({
+        connected: true,
+        loading: false,
+        busy: false,
+        error: null,
+        meta: null,
+      });
       setTelegramFlowActive(false);
       setSlackStatusData((prev) => (platform === "slack" ? prev : null));
       return;
@@ -370,10 +447,19 @@ export default function SendOptionsScreen() {
       return;
     }
     loadConnectionStatus();
-  }, [selectionRequiresConnection, loadConnectionStatus, platform, session?.accessToken]);
+  }, [
+    selectionRequiresConnection,
+    loadConnectionStatus,
+    platform,
+    session?.accessToken,
+  ]);
 
   const handleConnectPress = useCallback(async () => {
-    if (!selectionRequiresConnection || connectionState.connected || connectionState.busy) {
+    if (
+      !selectionRequiresConnection ||
+      connectionState.connected ||
+      connectionState.busy
+    ) {
       return;
     }
     if (!session?.accessToken) {
@@ -402,15 +488,26 @@ export default function SendOptionsScreen() {
       }
       setConnectionState((prev) => ({
         ...prev,
-        error: err instanceof Error ? err.message : "Unable to connect this channel.",
+        error:
+          err instanceof Error
+            ? err.message
+            : "Unable to connect this channel.",
       }));
     } finally {
       setConnectionState((prev) => ({ ...prev, busy: false }));
     }
-  }, [connectionState.busy, connectionState.connected, loadConnectionStatus, platform, selectionRequiresConnection, session?.accessToken]);
+  }, [
+    connectionState.busy,
+    connectionState.connected,
+    loadConnectionStatus,
+    platform,
+    selectionRequiresConnection,
+    session?.accessToken,
+  ]);
 
   const connectionReady =
-    !selectionRequiresConnection || (connectionState.connected && !connectionState.loading);
+    !selectionRequiresConnection ||
+    (connectionState.connected && !connectionState.loading);
 
   const platformLabel = platformMeta[platform].label;
 
@@ -488,7 +585,9 @@ export default function SendOptionsScreen() {
       .catch((err) => {
         if (cancelled) return;
         setSlackUsers([]);
-        setSlackUsersError(err instanceof Error ? err.message : "Unable to load Slack users.");
+        setSlackUsersError(
+          err instanceof Error ? err.message : "Unable to load Slack users.",
+        );
       })
       .finally(() => {
         if (cancelled) return;
@@ -525,10 +624,14 @@ export default function SendOptionsScreen() {
           }))
           .filter((contact) => contact.chat_id);
         setTelegramContacts(normalized);
-        const current = normalized.find((contact) => contact.chat_id === telegramChatId);
+        const current = normalized.find(
+          (contact) => contact.chat_id === telegramChatId,
+        );
         if (current) {
           if (current.username) {
-            const handle = current.username.startsWith("@") ? current.username : `@${current.username}`;
+            const handle = current.username.startsWith("@")
+              ? current.username
+              : `@${current.username}`;
             setTelegramUsername(handle);
           } else {
             setTelegramUsername("");
@@ -541,7 +644,11 @@ export default function SendOptionsScreen() {
       .catch((err) => {
         if (cancelled) return;
         setTelegramContacts([]);
-        setTelegramContactsError(err instanceof Error ? err.message : "Unable to load Telegram contacts.");
+        setTelegramContactsError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load Telegram contacts.",
+        );
       })
       .finally(() => {
         if (cancelled) return;
@@ -550,7 +657,12 @@ export default function SendOptionsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [platform, session?.accessToken, connectionState.connected, telegramChatId]);
+  }, [
+    platform,
+    session?.accessToken,
+    connectionState.connected,
+    telegramChatId,
+  ]);
 
   useEffect(() => {
     if (
@@ -589,16 +701,20 @@ export default function SendOptionsScreen() {
     {
       id: "self",
       title: "Send as you",
-      detail: "Connect your account so DueSoon mirrors your identity and signature.",
+      detail:
+        "Connect your account so DueSoon mirrors your identity and signature.",
       badge: "Recommended",
     },
   ];
 
   const slackWorkspaceLabel = selectedSlackWorkspace
-    ? selectedSlackWorkspace.team_name ?? selectedSlackWorkspace.team_id
+    ? (selectedSlackWorkspace.team_name ?? selectedSlackWorkspace.team_id)
     : "";
   const slackUserLabel =
-    selectedSlackUser?.real_name || selectedSlackUser?.display_name || selectedSlackUser?.name || "";
+    selectedSlackUser?.real_name ||
+    selectedSlackUser?.display_name ||
+    selectedSlackUser?.name ||
+    "";
   const telegramContactSummary = useMemo(() => {
     if (!selectedTelegramContact) {
       return null;
@@ -661,16 +777,27 @@ export default function SendOptionsScreen() {
 
     setSavingClient(true);
     try {
-      const clientPayload = buildClientPayload(persistedParams, validation.contactPayload);
+      const clientPayload = buildClientPayload(
+        persistedParams,
+        validation.contactPayload,
+      );
       const client = await createClient(clientPayload, session.accessToken);
-      const resolvedMethod = resolveContactMethod(client.contact_methods, validation.contactPayload);
+      const resolvedMethod = resolveContactMethod(
+        client.contact_methods,
+        validation.contactPayload,
+      );
       await proceedToPayment({
         clientId: client.id,
-        contactMethodId: resolvedMethod?.id ?? client.contact_methods[0]?.id ?? "",
+        contactMethodId:
+          resolvedMethod?.id ?? client.contact_methods[0]?.id ?? "",
         summaryValue: validation.summary,
       });
     } catch (err) {
-      setContactError(err instanceof Error ? err.message : "Unable to save this client right now.");
+      setContactError(
+        err instanceof Error
+          ? err.message
+          : "Unable to save this client right now.",
+      );
     } finally {
       setSavingClient(false);
     }
@@ -716,11 +843,15 @@ export default function SendOptionsScreen() {
     if (platform === "gmail" || platform === "outlook") {
       return (
         <>
-          <Text style={styles.fieldLabel}>{platformMeta[platform].contactLabel}</Text>
+          <Text style={styles.fieldLabel}>
+            {platformMeta[platform].contactLabel}
+          </Text>
           <TextInput
             style={[styles.input, contactError && styles.inputError]}
             placeholder={platformMeta[platform].placeholder}
-            keyboardType={platformMeta[platform].keyboard as KeyboardTypeOptions}
+            keyboardType={
+              platformMeta[platform].keyboard as KeyboardTypeOptions
+            }
             autoCapitalize="none"
             value={contactEmail}
             onChangeText={(text) => {
@@ -767,8 +898,15 @@ export default function SendOptionsScreen() {
               setContactError(null);
             }}
           >
-            <Text style={slackWorkspaceLabel ? styles.selectValue : styles.selectPlaceholder}>
-              {slackWorkspaceLabel || (noWorkspace ? "No workspaces connected" : "Select workspace")}
+            <Text
+              style={
+                slackWorkspaceLabel
+                  ? styles.selectValue
+                  : styles.selectPlaceholder
+              }
+            >
+              {slackWorkspaceLabel ||
+                (noWorkspace ? "No workspaces connected" : "Select workspace")}
             </Text>
             <Feather
               name={slackWorkspaceExpanded ? "chevron-up" : "chevron-down"}
@@ -790,7 +928,10 @@ export default function SendOptionsScreen() {
                   return (
                     <Pressable
                       key={workspace.team_id}
-                      style={[styles.selectionItem, active && styles.selectionItemActive]}
+                      style={[
+                        styles.selectionItem,
+                        active && styles.selectionItemActive,
+                      ]}
                       onPress={() => {
                         setSlackTeamId(workspace.team_id);
                         setSlackWorkspaceExpanded(false);
@@ -799,7 +940,9 @@ export default function SendOptionsScreen() {
                       }}
                     >
                       <Text style={styles.selectionItemName}>{label}</Text>
-                      <Text style={styles.selectionItemDetail}>{workspace.team_id}</Text>
+                      <Text style={styles.selectionItemDetail}>
+                        {workspace.team_id}
+                      </Text>
                     </Pressable>
                   );
                 })}
@@ -823,8 +966,14 @@ export default function SendOptionsScreen() {
               setContactError(null);
             }}
           >
-            <Text style={slackUserLabel ? styles.selectValue : styles.selectPlaceholder}>
-              {slackUsersLoading ? "Loading members…" : slackUserLabel || "Select person"}
+            <Text
+              style={
+                slackUserLabel ? styles.selectValue : styles.selectPlaceholder
+              }
+            >
+              {slackUsersLoading
+                ? "Loading members…"
+                : slackUserLabel || "Select person"}
             </Text>
             <Feather
               name={slackUsersExpanded ? "chevron-up" : "chevron-down"}
@@ -832,7 +981,9 @@ export default function SendOptionsScreen() {
               color={Theme.palette.slate}
             />
           </Pressable>
-          {slackUsersError ? <Text style={styles.helperTextError}>{slackUsersError}</Text> : null}
+          {slackUsersError ? (
+            <Text style={styles.helperTextError}>{slackUsersError}</Text>
+          ) : null}
           {slackUsersExpanded ? (
             <View style={[styles.selectionList, styles.selectionListLarge]}>
               {slackUsersLoading ? (
@@ -844,18 +995,26 @@ export default function SendOptionsScreen() {
                   <Text style={styles.helperTextError}>{slackUsersError}</Text>
                 </View>
               ) : slackUsers.length === 0 ? (
-                <Text style={styles.helperText}>No members found in this workspace.</Text>
+                <Text style={styles.helperText}>
+                  No members found in this workspace.
+                </Text>
               ) : (
                 <ScrollView keyboardShouldPersistTaps="handled">
                   {slackUsers.map((member) => {
                     const active = member.id === slackUserId;
-                    const name = member.real_name || member.display_name || member.name;
+                    const name =
+                      member.real_name || member.display_name || member.name;
                     const detail =
-                      member.display_name && member.display_name !== name ? member.display_name : member.name;
+                      member.display_name && member.display_name !== name
+                        ? member.display_name
+                        : member.name;
                     return (
                       <Pressable
                         key={member.id}
-                        style={[styles.selectionItem, active && styles.selectionItemActive]}
+                        style={[
+                          styles.selectionItem,
+                          active && styles.selectionItemActive,
+                        ]}
                         onPress={() => {
                           setSlackUserId(member.id);
                           setSlackUsersExpanded(false);
@@ -881,7 +1040,8 @@ export default function SendOptionsScreen() {
           style={[
             styles.selectInput,
             contactError && !telegramChatId && styles.inputError,
-            (!connectionState.connected || telegramContactsLoading) && styles.selectInputDisabled,
+            (!connectionState.connected || telegramContactsLoading) &&
+              styles.selectInputDisabled,
           ]}
           onPress={() => {
             if (!connectionState.connected) {
@@ -895,8 +1055,16 @@ export default function SendOptionsScreen() {
             setContactError(null);
           }}
         >
-          <Text style={telegramContactSummary ? styles.selectValue : styles.selectPlaceholder}>
-            {telegramContactsLoading ? "Loading chats…" : telegramContactSummary || "Select chat"}
+          <Text
+            style={
+              telegramContactSummary
+                ? styles.selectValue
+                : styles.selectPlaceholder
+            }
+          >
+            {telegramContactsLoading
+              ? "Loading chats…"
+              : telegramContactSummary || "Select chat"}
           </Text>
           <Feather
             name={telegramPickerExpanded ? "chevron-up" : "chevron-down"}
@@ -904,9 +1072,16 @@ export default function SendOptionsScreen() {
             color={Theme.palette.slate}
           />
         </Pressable>
-        {telegramContactsError ? <Text style={styles.helperTextError}>{telegramContactsError}</Text> : null}
-        {!telegramContactsLoading && telegramContacts.length === 0 && !telegramContactsError ? (
-          <Text style={styles.helperText}>Start a Telegram conversation so it appears here.</Text>
+        {telegramContactsError ? (
+          <Text style={styles.helperTextError}>{telegramContactsError}</Text>
+        ) : null}
+        {!telegramContactsLoading &&
+        telegramContacts.length === 0 &&
+        !telegramContactsError ? (
+          <Text style={styles.helperText}>
+            Start a Telegram conversation so it appears here. {"\n\n"}Only
+            clients that have messaged after time of connection appear here.
+          </Text>
         ) : null}
         {telegramPickerExpanded ? (
           <View style={[styles.selectionList, styles.selectionListLarge]}>
@@ -923,7 +1098,8 @@ export default function SendOptionsScreen() {
                 {telegramContacts.map((contact) => {
                   const chatId = String(contact.chat_id);
                   const active = chatId === telegramChatId;
-                  const name = contact.name || contact.username || `Chat ${chatId}`;
+                  const name =
+                    contact.name || contact.username || `Chat ${chatId}`;
                   const username = contact.username
                     ? contact.username.startsWith("@")
                       ? contact.username
@@ -931,13 +1107,17 @@ export default function SendOptionsScreen() {
                     : "";
                   const detailParts: string[] = [];
                   if (username) detailParts.push(username);
-                  if (contact.assigned_client_id) detailParts.push("Linked client");
+                  if (contact.assigned_client_id)
+                    detailParts.push("Linked client");
                   const detail = detailParts.join(" · ");
                   const lastMessage = contact.last_message || null;
                   return (
                     <Pressable
                       key={chatId}
-                      style={[styles.selectionItem, active && styles.selectionItemActive]}
+                      style={[
+                        styles.selectionItem,
+                        active && styles.selectionItemActive,
+                      ]}
                       onPress={() => {
                         setTelegramChatId(chatId);
                         setTelegramUsername(username);
@@ -946,9 +1126,14 @@ export default function SendOptionsScreen() {
                       }}
                     >
                       <Text style={styles.selectionItemName}>{name}</Text>
-                      {detail ? <Text style={styles.selectionItemDetail}>{detail}</Text> : null}
+                      {detail ? (
+                        <Text style={styles.selectionItemDetail}>{detail}</Text>
+                      ) : null}
                       {lastMessage ? (
-                        <Text style={styles.selectionItemNote} numberOfLines={2}>
+                        <Text
+                          style={styles.selectionItemNote}
+                          numberOfLines={2}
+                        >
                           {lastMessage}
                         </Text>
                       ) : null}
@@ -972,7 +1157,10 @@ export default function SendOptionsScreen() {
             <Text style={styles.backLabel}>Choose platform</Text>
           </Pressable>
           {draftId ? (
-            <Pressable style={styles.remindersLink} onPress={handleReturnToReminders}>
+            <Pressable
+              style={styles.remindersLink}
+              onPress={handleReturnToReminders}
+            >
               <Feather name="home" size={18} color={Theme.palette.slate} />
               <Text style={styles.remindersLabel}>Reminders</Text>
             </Pressable>
@@ -982,7 +1170,8 @@ export default function SendOptionsScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>How should we send it?</Text>
           <Text style={styles.subtitle}>
-            Decide whether DueSoon keeps the reminder anonymous or sends it directly through your {platformLabel} account.
+            Decide whether DueSoon keeps the reminder anonymous or sends it
+            directly through your {platformLabel} account.
           </Text>
           {platform === "gmail" || platform === "outlook" ? (
             <Pressable
@@ -991,7 +1180,8 @@ export default function SendOptionsScreen() {
                 await Haptics.selectionAsync();
                 const currentPlatform = platform;
                 const next = currentPlatform === "gmail" ? "outlook" : "gmail";
-                const requiresConnection = selection === "self" && supportsConnection(next);
+                const requiresConnection =
+                  selection === "self" && supportsConnection(next);
                 setPlatform(next);
                 setSelectionRequiresConnection(requiresConnection);
                 setConnectionState({
@@ -1003,8 +1193,14 @@ export default function SendOptionsScreen() {
                 });
                 setContactLabel((prev) => {
                   if (persistedParams.contactLabel) return prev;
-                  const previousDefault = buildContactLabelDefault(currentPlatform, clientName);
-                  const nextDefault = buildContactLabelDefault(next, clientName);
+                  const previousDefault = buildContactLabelDefault(
+                    currentPlatform,
+                    clientName,
+                  );
+                  const nextDefault = buildContactLabelDefault(
+                    next,
+                    clientName,
+                  );
                   return prev === previousDefault ? nextDefault : prev;
                 });
               }}
@@ -1012,7 +1208,11 @@ export default function SendOptionsScreen() {
               <Text style={styles.platformLinkText}>
                 Use {platform === "gmail" ? "Outlook" : "Gmail"} instead
               </Text>
-              <Feather name="external-link" size={14} color={Theme.palette.slate} />
+              <Feather
+                name="external-link"
+                size={14}
+                color={Theme.palette.slate}
+              />
             </Pressable>
           ) : null}
         </View>
@@ -1042,34 +1242,47 @@ export default function SendOptionsScreen() {
                   option.id === "self" ? (
                     supportsConnection(platform) ? (
                       <View style={styles.connectBox}>
-                        <Text style={styles.connectTitle}>Connect {platformLabel}</Text>
+                        <Text style={styles.connectTitle}>
+                          Connect {platformLabel}
+                        </Text>
                         <Text style={styles.connectDetail}>
-                          DueSoon sends directly from your {platformLabel} account so messages feel personal.
+                          DueSoon sends directly from your {platformLabel}{" "}
+                          account so messages feel personal.
                         </Text>
                         {connectionState.meta ? (
-                          <Text style={styles.connectMeta}>{connectionState.meta}</Text>
+                          <Text style={styles.connectMeta}>
+                            {connectionState.meta}
+                          </Text>
                         ) : null}
                         {connectionState.error ? (
-                          <Text style={styles.errorText}>{connectionState.error}</Text>
+                          <Text style={styles.errorText}>
+                            {connectionState.error}
+                          </Text>
                         ) : null}
                         <Pressable
                           style={[
                             styles.connectButton,
-                            connectionState.connected && styles.connectButtonConnected,
-                            (connectionState.busy || connectionState.loading) && styles.connectButtonDisabled,
+                            connectionState.connected &&
+                              styles.connectButtonConnected,
+                            (connectionState.busy || connectionState.loading) &&
+                              styles.connectButtonDisabled,
                           ]}
-                        disabled={
-                          connectionState.connected || connectionState.busy || connectionState.loading
-                        }
-                        onPress={async () => {
-                          await Haptics.selectionAsync();
-                          await handleConnectPress();
-                        }}
-                      >
+                          disabled={
+                            connectionState.connected ||
+                            connectionState.busy ||
+                            connectionState.loading
+                          }
+                          onPress={async () => {
+                            await Haptics.selectionAsync();
+                            await handleConnectPress();
+                          }}
+                        >
                           {connectionState.connected ? (
                             <View style={styles.connectButtonContent}>
                               <Feather name="check" size={14} color="#FFFFFF" />
-                              <Text style={styles.connectButtonText}>Connected</Text>
+                              <Text style={styles.connectButtonText}>
+                                Connected
+                              </Text>
                             </View>
                           ) : (
                             <Text style={styles.connectButtonText}>
@@ -1084,17 +1297,27 @@ export default function SendOptionsScreen() {
                       </View>
                     ) : (
                       <View style={styles.noteBox}>
-                        <Feather name="info" size={16} color={Theme.palette.slate} />
+                        <Feather
+                          name="info"
+                          size={16}
+                          color={Theme.palette.slate}
+                        />
                         <Text style={styles.noteText}>
-                          We’ll send via your {platformLabel} identity automatically.
+                          We’ll send via your {platformLabel} identity
+                          automatically.
                         </Text>
                       </View>
                     )
                   ) : (
                     <View style={styles.noteBox}>
-                      <Feather name="shield" size={16} color={Theme.palette.slate} />
+                      <Feather
+                        name="shield"
+                        size={16}
+                        color={Theme.palette.slate}
+                      />
                       <Text style={styles.noteText}>
-                        DueSoon shares a compliance-friendly inbox with read receipts so you never double send.
+                        DueSoon shares a compliance-friendly inbox with read
+                        receipts so you never double send.
                       </Text>
                     </View>
                   )
@@ -1117,10 +1340,14 @@ export default function SendOptionsScreen() {
             openContactModal();
           }}
         >
-          <Text style={styles.primaryButtonText}>Use {selectionLabel(selection)} via {platformLabel}</Text>
+          <Text style={styles.primaryButtonText}>
+            Use {selectionLabel(selection)} via {platformLabel}
+          </Text>
         </Pressable>
         {selectionRequiresConnection && !connectionState.connected ? (
-          <Text style={styles.connectionHint}>Connect {platformLabel} to continue.</Text>
+          <Text style={styles.connectionHint}>
+            Connect {platformLabel} to continue.
+          </Text>
         ) : null}
       </ScrollView>
 
@@ -1138,7 +1365,8 @@ export default function SendOptionsScreen() {
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Client contact</Text>
               <Text style={styles.modalSubtitle}>
-                DueSoon needs the client’s contact details for {platformLabel} before scheduling the reminder.
+                DueSoon needs the client’s contact details for {platformLabel}{" "}
+                before scheduling the reminder.
               </Text>
               <Text style={styles.fieldLabel}>Contact label</Text>
               <TextInput
@@ -1150,36 +1378,40 @@ export default function SendOptionsScreen() {
                   setContactLabel(text);
                 }}
               />
-            {renderContactFields()}
-            {contactError ? <Text style={styles.errorText}>{contactError}</Text> : null}
-            <View style={styles.modalActions}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modalButtonMuted,
-                  pressed && styles.modalButtonMutedPressed,
-                ]}
-                onPress={async () => {
-                  await Haptics.selectionAsync();
-                  setModalVisible(false);
-                }}
-              >
-                <Text style={styles.modalButtonMutedText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.modalButton,
-                  savingClient && styles.modalButtonDisabled,
-                  pressed && !savingClient && styles.modalButtonPressed,
-                ]}
-                disabled={savingClient}
-                onPress={async () => {
-                  await Haptics.selectionAsync();
-                  handleContinue();
-                }}
-              >
-                <Text style={styles.modalButtonText}>{savingClient ? "Saving..." : "Continue"}</Text>
-              </Pressable>
-            </View>
+              {renderContactFields()}
+              {contactError ? (
+                <Text style={styles.errorText}>{contactError}</Text>
+              ) : null}
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modalButtonMuted,
+                    pressed && styles.modalButtonMutedPressed,
+                  ]}
+                  onPress={async () => {
+                    await Haptics.selectionAsync();
+                    setModalVisible(false);
+                  }}
+                >
+                  <Text style={styles.modalButtonMutedText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.modalButton,
+                    savingClient && styles.modalButtonDisabled,
+                    pressed && !savingClient && styles.modalButtonPressed,
+                  ]}
+                  disabled={savingClient}
+                  onPress={async () => {
+                    await Haptics.selectionAsync();
+                    handleContinue();
+                  }}
+                >
+                  <Text style={styles.modalButtonText}>
+                    {savingClient ? "Saving..." : "Continue"}
+                  </Text>
+                </Pressable>
+              </View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -1203,7 +1435,10 @@ function validateContactFields(
 ): ValidationResult {
   const trimmedLabel = fields.label.trim();
   if (!trimmedLabel) {
-    return { valid: false, error: "Add a label so you recognize the contact later." };
+    return {
+      valid: false,
+      error: "Add a label so you recognize the contact later.",
+    };
   }
   if (platform === "gmail" || platform === "outlook") {
     if (!fields.email.trim()) {
@@ -1286,18 +1521,27 @@ function buildClientPayload(
     name: params.client ?? "Client",
     company_name: params.businessName || undefined,
     notes: params.notes || undefined,
-    client_type: (params.clientType as ClientCreatePayload["client_type"]) ?? "business",
+    client_type:
+      (params.clientType as ClientCreatePayload["client_type"]) ?? "business",
     contact_methods: [contactPayload],
   };
 }
 
-function resolveContactMethod(contactMethods: ContactMethod[], payload: ContactMethodPayload) {
+function resolveContactMethod(
+  contactMethods: ContactMethod[],
+  payload: ContactMethodPayload,
+) {
   return contactMethods.find((method) => {
     if (method.type !== payload.type) return false;
     if (payload.email && method.email === payload.email) return true;
     if (payload.phone && method.phone === payload.phone) return true;
-    if (payload.slack_team_id && method.slack_team_id === payload.slack_team_id) return true;
-    if (payload.telegram_chat_id && method.telegram_chat_id === payload.telegram_chat_id) return true;
+    if (payload.slack_team_id && method.slack_team_id === payload.slack_team_id)
+      return true;
+    if (
+      payload.telegram_chat_id &&
+      method.telegram_chat_id === payload.telegram_chat_id
+    )
+      return true;
     return false;
   });
 }
@@ -1674,14 +1918,19 @@ const styles = StyleSheet.create({
 });
 
 function supportsConnection(id: PlatformId) {
-  return id === "gmail" || id === "outlook" || id === "slack" || id === "telegram";
+  return (
+    id === "gmail" || id === "outlook" || id === "slack" || id === "telegram"
+  );
 }
 
 function formatExpiry(iso?: string | null) {
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
-  return `Expires ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  return `Expires ${date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })}`;
 }
 
 function formatGmailMeta(status: GmailStatus) {
@@ -1725,7 +1974,7 @@ function getRedirectUri() {
     return ENV_OAUTH_REDIRECT;
   }
   return AuthSession.makeRedirectUri({
-    scheme: Platform.select({ web: undefined, default: "mobileapp" }),
+    scheme: Platform.select({ web: undefined, default: "ambeduesoon" }),
   });
 }
 
@@ -1759,9 +2008,14 @@ async function startGmailConnect(token: string) {
   const status = await fetchGmailStatus(token, { redirectUri });
   const onboardingUrl = status.onboarding_url;
   if (!onboardingUrl) {
-    throw new Error("Unable to start the Gmail consent flow. Please try again.");
+    throw new Error(
+      "Unable to start the Gmail consent flow. Please try again.",
+    );
   }
-  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  const result = await WebBrowser.openAuthSessionAsync(
+    onboardingUrl,
+    redirectUri,
+  );
   if (result.type !== "success" || !result.url) {
     throw new Error("Gmail connection was canceled.");
   }
@@ -1769,7 +2023,9 @@ async function startGmailConnect(token: string) {
   const code = params.code;
   const state = params.state;
   if (!code || !state) {
-    throw new Error("Gmail did not return the required credentials. Please try again.");
+    throw new Error(
+      "Gmail did not return the required credentials. Please try again.",
+    );
   }
   await connectGmailAccount({ code, state, redirectUri }, token);
 }
@@ -1779,9 +2035,14 @@ async function startOutlookConnect(token: string) {
   const status = await fetchOutlookStatus(token, { redirectUri });
   const onboardingUrl = status.onboarding_url;
   if (!onboardingUrl) {
-    throw new Error("Unable to start the Outlook consent flow. Please try again.");
+    throw new Error(
+      "Unable to start the Outlook consent flow. Please try again.",
+    );
   }
-  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  const result = await WebBrowser.openAuthSessionAsync(
+    onboardingUrl,
+    redirectUri,
+  );
   if (result.type !== "success" || !result.url) {
     throw new Error("Outlook connection was canceled.");
   }
@@ -1789,7 +2050,9 @@ async function startOutlookConnect(token: string) {
   const code = params.code;
   const state = params.state;
   if (!code || !state) {
-    throw new Error("Outlook did not return the required credentials. Please try again.");
+    throw new Error(
+      "Outlook did not return the required credentials. Please try again.",
+    );
   }
   await connectOutlookAccount({ code, state, redirectUri }, token);
 }
@@ -1799,9 +2062,14 @@ async function startSlackConnect(token: string) {
   const status = await fetchSlackStatus(token, { redirectUri });
   const onboardingUrl = status.onboarding_url;
   if (!onboardingUrl) {
-    throw new Error("Unable to start the Slack consent flow. Please try again.");
+    throw new Error(
+      "Unable to start the Slack consent flow. Please try again.",
+    );
   }
-  const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+  const result = await WebBrowser.openAuthSessionAsync(
+    onboardingUrl,
+    redirectUri,
+  );
   if (result.type !== "success" || !result.url) {
     throw new Error("Slack connection was canceled.");
   }
@@ -1809,7 +2077,9 @@ async function startSlackConnect(token: string) {
   const code = params.code;
   const state = params.state;
   if (!code || !state) {
-    throw new Error("Slack did not return the required credentials. Please try again.");
+    throw new Error(
+      "Slack did not return the required credentials. Please try again.",
+    );
   }
   await connectSlackAccount({ code, state, redirectUri }, token);
 }

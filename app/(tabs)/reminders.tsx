@@ -2,20 +2,25 @@ import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
+  GestureResponderEvent,
+  Modal,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
-  Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
 import { formatCurrency } from "@/lib/dashboard-clients";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { reminderQuotaAvailable, showReminderQuotaUpsell } from "@/lib/subscription";
 import { useAuth } from "@/providers/auth-provider";
-import { fetchReminderDrafts } from "@/services/reminder-drafts";
+import { deleteReminderDraft, fetchReminderDrafts } from "@/services/reminder-drafts";
 import { fetchUpcomingReminders } from "@/services/reminders";
 import type { ReminderDraft } from "@/types/reminder-drafts";
 import type { UpcomingReminder } from "@/types/reminders";
@@ -26,7 +31,8 @@ const UPCOMING_LIMIT = 3;
 
 export default function RemindersScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
+  const hasReminderQuota = reminderQuotaAvailable(user?.subscription);
   const [upcoming, setUpcoming] = useState<UpcomingReminder[]>([]);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +40,8 @@ export default function RemindersScreen() {
   const [draftsLoading, setDraftsLoading] = useState(false);
   const [draftsError, setDraftsError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  const [draftPendingDelete, setDraftPendingDelete] = useState<ReminderDraft | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,6 +177,10 @@ export default function RemindersScreen() {
   const handleDraftPress = useCallback(
     (draft: ReminderDraft) => {
       if (!draft) return;
+      if (!hasReminderQuota) {
+        showReminderQuotaUpsell();
+        return;
+      }
       const params: Record<string, string> = {};
       Object.entries(draft.params ?? {}).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
@@ -181,8 +193,60 @@ export default function RemindersScreen() {
         params,
       });
     },
-    [router],
+    [router, hasReminderQuota],
   );
+
+  const performDeleteDraft = useCallback(
+    async (draft: ReminderDraft) => {
+      if (!session?.accessToken) {
+        Alert.alert("Sign in required", "Sign back in to delete this draft.");
+        return false;
+      }
+      setDeletingDraftId(draft.id);
+      try {
+        await deleteReminderDraft(draft.id, session.accessToken);
+        setDrafts((prev) => {
+          const next = prev.filter((item) => item.id !== draft.id);
+          void setCachedValue(REMINDER_DRAFTS_CACHE_KEY, next);
+          return next;
+        });
+        return true;
+      } catch (err) {
+        Alert.alert(
+          "Unable to delete draft",
+          err instanceof Error ? err.message : "Please try again later.",
+        );
+        return false;
+      } finally {
+        setDeletingDraftId((current) => (current === draft.id ? null : current));
+      }
+    },
+    [session?.accessToken],
+  );
+
+  const handleDeleteDraft = useCallback(
+    (draft: ReminderDraft) => {
+      setDraftPendingDelete(draft);
+    },
+    [],
+  );
+
+  const dismissDeleteDraft = useCallback(() => {
+    if (deletingDraftId) {
+      return;
+    }
+    setDraftPendingDelete(null);
+  }, [deletingDraftId]);
+
+  const confirmDeleteDraft = useCallback(async () => {
+    if (!draftPendingDelete) {
+      return;
+    }
+    const deleted = await performDeleteDraft(draftPendingDelete);
+    if (deleted) {
+      setDraftPendingDelete(null);
+    }
+  }, [draftPendingDelete, performDeleteDraft]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -274,8 +338,28 @@ export default function RemindersScreen() {
                   onPress={() => handleDraftPress(item.draft)}
                 >
                   <View style={styles.cardHeader}>
-                    <Text style={styles.cardClient}>{item.client}</Text>
-                    {item.amount ? <Text style={styles.cardAmount}>{item.amount}</Text> : null}
+                    <View style={styles.cardHeaderInfo}>
+                      <Text style={styles.cardClient}>{item.client}</Text>
+                      {item.amount ? <Text style={styles.cardAmount}>{item.amount}</Text> : null}
+                    </View>
+                    <Pressable
+                      style={styles.draftDeleteButton}
+                      onPress={(event: GestureResponderEvent) => {
+                        event.stopPropagation();
+                        handleDeleteDraft(item.draft);
+                      }}
+                      hitSlop={8}
+                      disabled={deletingDraftId === item.id}
+                    >
+                      {deletingDraftId === item.id ? (
+                        <ActivityIndicator size="small" color={Theme.palette.accent} />
+                      ) : (
+                        <>
+                          <Feather name="trash-2" size={14} color={Theme.palette.accent} />
+                          <Text style={styles.draftDeleteLabel}>Delete</Text>
+                        </>
+                      )}
+                    </Pressable>
                   </View>
                   <View style={styles.row}>
                     <Feather name="edit-3" size={16} color={Theme.palette.slate} />
@@ -288,6 +372,42 @@ export default function RemindersScreen() {
           </View>
         </View>
       </ScrollView>
+      <Modal
+        transparent
+        animationType="fade"
+        visible={Boolean(draftPendingDelete)}
+        onRequestClose={dismissDeleteDraft}
+      >
+        <Pressable style={styles.modalOverlay} onPress={dismissDeleteDraft}>
+          <View style={styles.modalBackdrop} />
+        </Pressable>
+        <View style={styles.modalSheet}>
+          <Text style={styles.modalTitle}>Delete draft?</Text>
+          <Text style={styles.modalSubtitle}>
+            This removes the saved reminder details.
+          </Text>
+          <View style={styles.modalActions}>
+            <Pressable
+              style={[styles.modalButton, styles.modalButtonSecondary]}
+              onPress={dismissDeleteDraft}
+              disabled={Boolean(deletingDraftId)}
+            >
+              <Text style={styles.modalButtonLabelSecondary}>Keep it</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.modalButton, styles.modalButtonDanger]}
+              onPress={() => void confirmDeleteDraft()}
+              disabled={deletingDraftId === draftPendingDelete?.id}
+            >
+              {deletingDraftId === draftPendingDelete?.id ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.modalButtonLabelDanger}>Delete</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -327,6 +447,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
   },
+  cardHeaderInfo: {
+    flex: 1,
+    gap: 4,
+    paddingRight: Theme.spacing.md,
+  },
   cardClient: {
     fontSize: 16,
     fontWeight: "500",
@@ -357,6 +482,73 @@ const styles = StyleSheet.create({
   cardDraft: {
     borderStyle: "dashed",
     borderColor: Theme.palette.border,
+  },
+  draftDeleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: 2,
+  },
+  draftDeleteLabel: {
+    fontSize: 12,
+    color: Theme.palette.accent,
+    fontWeight: "500",
+  },
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.5)",
+  },
+  modalSheet: {
+    position: "absolute",
+    left: 24,
+    right: 24,
+    bottom: 40,
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.sm,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: Theme.spacing.sm,
+    marginTop: Theme.spacing.sm,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalButtonSecondary: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+  },
+  modalButtonDanger: {
+    backgroundColor: Theme.palette.accent,
+  },
+  modalButtonLabelSecondary: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: Theme.palette.ink,
+  },
+  modalButtonLabelDanger: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#FFFFFF",
   },
   errorText: {
     fontSize: 13,

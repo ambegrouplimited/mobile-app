@@ -2,6 +2,7 @@ import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import * as AuthSession from "expo-auth-session";
 import * as Linking from "expo-linking";
 import * as Notifications from "expo-notifications";
+import { usePathname, useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 import {
@@ -16,22 +17,54 @@ import {
 } from "react";
 import { Platform } from "react-native";
 
-import { requestDevicePushToken } from "@/lib/push-notifications";
+import { SubscriptionUpsellModal } from "@/components/ui/subscription-upsell-modal";
+import { requestExpoPushToken } from "@/lib/push-notifications";
+import {
+  openSubscriptionUpsell,
+  setCachedPlanSummary,
+} from "@/lib/subscription-upsell";
 import {
   AuthUser,
   OAuthProvider,
   TokenResponse,
+  confirmTwoFactorRecovery,
   exchangeAppleCode,
   exchangeGoogleCode,
   exchangeGoogleIdToken,
   getAuthorizationUrl,
   refreshAuthTokens,
   requestTwoFactorRecovery,
-  confirmTwoFactorRecovery,
   updateCurrentUser,
   verifyTwoFactorCode,
 } from "@/services/auth";
 import { deletePushToken, registerPushToken } from "@/services/notifications";
+import { fetchSubscriptionPlanSummary } from "@/services/subscription-settings";
+import { fetchSubscriptionSummary } from "@/services/subscriptions";
+
+import firebase from "@react-native-firebase/app";
+
+// Replace your current handshake block with this:
+if (Platform.OS === "android") {
+  if (!firebase.apps.length) {
+    try {
+      // Don't pass firebase.app().options here
+      firebase.initializeApp(firebase.app().options);
+      // ^ If the above fails, use this instead: firebase.initializeApp({});
+      console.log("✅ Firebase Handshake Successful");
+    } catch (e) {
+      // If it's already initialized by the native layer, this will catch it
+      console.log("Firebase status:", e);
+    }
+  }
+}
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowAlert: false,
+  }),
+});
 
 type AuthStatus = "loading" | "unauthenticated" | "authenticated";
 
@@ -58,6 +91,12 @@ type TwoFactorRecoveryState = {
   sending: boolean;
   verifying: boolean;
   error: string | null;
+};
+
+type InAppNotificationPayload = {
+  title: string;
+  body?: string;
+  route?: string;
 };
 
 type AuthContextValue = {
@@ -151,15 +190,25 @@ function createStateToken() {
     .join("");
 }
 
+function formatPushTokenForLog(token?: string | null) {
+  if (!token) {
+    return "none";
+  }
+  if (token.length <= 12) {
+    return token;
+  }
+  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+}
+
 function getRedirectUri() {
   return AuthSession.makeRedirectUri({
-    scheme: Platform.select({ web: undefined, default: "mobileapp" }),
+    scheme: Platform.select({ web: undefined, default: "ambeduesoon" }),
   });
 }
 
 async function openAuthSessionAsync(
   authUrl: string,
-  returnUrl: string
+  returnUrl: string,
 ): Promise<AuthSession.AuthSessionResult> {
   const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
   if (result.type !== "success" || !result.url) {
@@ -242,17 +291,31 @@ function DisabledAuthProvider({ children }: { children: ReactNode }) {
       submitTwoFactorRecovery: async () => {},
       updateUserProfile: async () => {},
     }),
-    []
+    [],
   );
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      {/* <InAppNotificationBanner
+        visible={Boolean(inAppNotification)}
+        title={inAppNotification?.title ?? ""}
+        body={inAppNotification?.body}
+        onPress={handleInAppNotificationPress}
+        onDismiss={dismissInAppNotification}
+      /> */}
+    </AuthContext.Provider>
+  );
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (AUTH_DISABLED) {
     return <DisabledAuthProvider>{children}</DisabledAuthProvider>;
   }
+  const router = useRouter();
+  const pathname = usePathname();
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<SessionState | null>(null);
+  const user = session?.user ?? null;
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [oauthCache, setOauthCache] = useState<
@@ -271,11 +334,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshInFlight = useRef(false);
   const pushTokenRef = useRef<string | null>(null);
   const pushRegistrationInFlight = useRef(false);
+  const upsellShownRef = useRef(false);
   const lastAuthTokenRef = useRef<string | null>(null);
+  const pendingRouteRef = useRef<string | null>(null);
+  const [inAppNotification, setInAppNotification] =
+    useState<InAppNotificationPayload | null>(null);
   const [twoFactorChallengeState, setTwoFactorChallengeState] = useState<{
     token: string;
     user: AuthUser;
   } | null>(null);
+  const [subscriptionCheckComplete, setSubscriptionCheckComplete] =
+    useState(false);
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
   const [twoFactorVerifying, setTwoFactorVerifying] = useState(false);
   const [twoFactorRecoveryState, setTwoFactorRecoveryState] =
@@ -287,7 +356,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!GOOGLE_WEB_CLIENT_ID) {
       console.warn(
-        "Missing EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID for Google Sign-In."
+        "Missing EXPO_PUBLIC_GOOGLE_OAUTH_CLIENT_ID for Google Sign-In.",
       );
       return;
     }
@@ -356,6 +425,183 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const handleNotificationRoute = useCallback(
+    (routeValue: unknown) => {
+      if (typeof routeValue !== "string" || routeValue.trim().length === 0) {
+        return;
+      }
+      const normalizedRoute = routeValue.startsWith("/")
+        ? routeValue
+        : `/${routeValue}`;
+      if (status === "authenticated") {
+        router.push(normalizedRoute);
+        pendingRouteRef.current = null;
+      } else {
+        pendingRouteRef.current = normalizedRoute;
+      }
+    },
+    [router, status],
+  );
+
+  const dismissInAppNotification = useCallback(() => {
+    setInAppNotification(null);
+  }, []);
+
+  const handleInAppNotificationPress = useCallback(() => {
+    if (!inAppNotification) {
+      return;
+    }
+    if (inAppNotification.route) {
+      handleNotificationRoute(inAppNotification.route);
+    }
+    dismissInAppNotification();
+  }, [dismissInAppNotification, handleNotificationRoute, inAppNotification]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data =
+          (response?.notification?.request?.content?.data as
+            | Record<string, unknown>
+            | undefined) ?? {};
+        const routeValue =
+          typeof data?.route === "string" ? (data.route as string) : undefined;
+        handleNotificationRoute(routeValue);
+      },
+    );
+    Notifications.getLastNotificationResponseAsync()
+      .then((lastResponse) => {
+        if (!isMounted || !lastResponse) {
+          return;
+        }
+        const data =
+          (lastResponse.notification.request.content.data as
+            | Record<string, unknown>
+            | undefined) ?? {};
+        const routeValue =
+          typeof data?.route === "string" ? (data.route as string) : undefined;
+        handleNotificationRoute(routeValue);
+      })
+      .catch(() => {
+        // ignore
+      });
+    return () => {
+      isMounted = false;
+      subscription.remove();
+    };
+  }, [handleNotificationRoute]);
+
+  useEffect(() => {
+    const receivedSubscription = Notifications.addNotificationReceivedListener(
+      (notification) => {
+        const content = notification.request.content;
+        const data =
+          (content.data as Record<string, unknown> | undefined) ?? undefined;
+        const routeValue =
+          typeof data?.route === "string" ? (data.route as string) : undefined;
+        setInAppNotification({
+          title: content.title ?? "DueSoon",
+          body: content.body ?? undefined,
+          route: routeValue,
+        });
+      },
+    );
+    return () => {
+      receivedSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSubscriptionPlanSummary()
+      .then((summary) => {
+        if (!cancelled) {
+          setCachedPlanSummary(summary);
+        }
+      })
+      .catch(() => {
+        // ignore
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session?.accessToken) {
+      setSubscriptionCheckComplete(false);
+      return;
+    }
+    let cancelled = false;
+    setSubscriptionCheckComplete(false);
+    fetchSubscriptionSummary(session.accessToken)
+      .then((summary) => {
+        if (cancelled) {
+          return;
+        }
+        setSession((prev) => {
+          if (!prev) {
+            return prev;
+          }
+          const nextSession = {
+            ...prev,
+            user: {
+              ...prev.user,
+              subscription: summary,
+            },
+          };
+          storageSet(JSON.stringify(nextSession));
+          return nextSession;
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("Failed to refresh subscription status", err);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSubscriptionCheckComplete(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.accessToken]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !user) {
+      upsellShownRef.current = false;
+      return;
+    }
+    const isActive = Boolean(
+      user.subscription?.is_active || user.subscription?.is_trialing,
+    );
+    if (!isActive && !subscriptionCheckComplete) {
+      return;
+    }
+    if (!isActive) {
+      if (!upsellShownRef.current) {
+        openSubscriptionUpsell(
+          "Join DueSoon Pro to send unlimited reminders, access messaging, and keep automations running.",
+          { headline: "Unlock DueSoon Pro" },
+        );
+        upsellShownRef.current = true;
+      }
+    } else {
+      upsellShownRef.current = false;
+    }
+  }, [status, subscriptionCheckComplete, user]);
+
+  useEffect(() => {
+    if (status === "authenticated" && pendingRouteRef.current) {
+      const destination = pendingRouteRef.current;
+      pendingRouteRef.current = null;
+      router.push(destination);
+    }
+  }, [router, status]);
+
   const updateUserProfile = useCallback(
     async (payload: {
       name?: string;
@@ -412,7 +658,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return nextSession;
       });
     },
-    [session?.accessToken]
+    [session?.accessToken],
   );
 
   const refreshWithToken = useCallback(
@@ -432,7 +678,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshInFlight.current = false;
       }
     },
-    [logout, persistSession, session?.refreshToken]
+    [logout, persistSession, session?.refreshToken],
   );
 
   const refreshSession = useCallback(async () => {
@@ -472,10 +718,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session?.accessToken]);
 
   useEffect(() => {
-    if (
-      !session?.accessToken ||
-      session.user.notification_settings?.push_notifications === false
-    ) {
+    if (!session?.accessToken) {
+      return;
+    }
+    if (session.user.notification_settings?.push_notifications === false) {
+      removeRegisteredPushToken(session.accessToken).catch(() => {});
       return;
     }
     const subscription = Notifications.addPushTokenListener(
@@ -487,22 +734,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!nextToken || pushTokenRef.current === nextToken) {
           return;
         }
-        const platform =
-          Platform.OS === "android"
-            ? "android"
-            : Platform.OS === "ios"
-            ? "ios"
-            : "web";
         try {
-          await registerPushToken(
-            { token: nextToken, platform },
-            session.accessToken
-          );
+          await registerPushToken({ token: nextToken }, session.accessToken);
           pushTokenRef.current = nextToken;
+          console.log(
+            "[Push] Registered refreshed token for user",
+            session.user.id,
+            formatPushTokenForLog(nextToken),
+          );
         } catch (error) {
           console.warn("Failed to refresh push token", error);
         }
-      }
+      },
     );
     return () => {
       subscription.remove();
@@ -529,15 +772,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       pushRegistrationInFlight.current = true;
       try {
-        const deviceToken = await requestDevicePushToken();
-        if (!deviceToken || cancelled) {
+        const expoToken = await requestExpoPushToken();
+        if (!expoToken || cancelled) {
           return;
         }
-        if (pushTokenRef.current === deviceToken.token) {
+        if (pushTokenRef.current === expoToken) {
           return;
         }
-        await registerPushToken(deviceToken, session.accessToken);
-        pushTokenRef.current = deviceToken.token;
+        await registerPushToken({ token: expoToken }, session.accessToken);
+        pushTokenRef.current = expoToken;
+        console.log(
+          "[Push] Registered initial token for user",
+          session.user.id,
+          formatPushTokenForLog(expoToken),
+        );
       } catch (error) {
         console.warn("Failed to register push token", error);
       } finally {
@@ -560,7 +808,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const msUntilRefresh = Math.max(
       session.expiresAt - Date.now() - 60 * 1000,
-      5_000
+      5_000,
     );
     const timeoutId = setTimeout(() => {
       refreshSession().catch(() => {
@@ -686,7 +934,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const result = await openAuthSessionAsync(
           config.authUrl,
-          config.redirectUri
+          config.redirectUri,
         );
 
         if (result.type !== "success") {
@@ -750,7 +998,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         prefetchAuthUrl(provider);
       }
     },
-    [oauthCache, persistSession, prefetchAuthUrl, resetTwoFactorRecoveryState, session]
+    [
+      oauthCache,
+      persistSession,
+      prefetchAuthUrl,
+      resetTwoFactorRecoveryState,
+      session,
+    ],
   );
 
   const submitTwoFactorCode = useCallback(
@@ -772,13 +1026,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTwoFactorError(
           err instanceof Error
             ? err.message
-            : "Unable to verify the code. Please try again."
+            : "Unable to verify the code. Please try again.",
         );
       } finally {
         setTwoFactorVerifying(false);
       }
     },
-    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState]
+    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState],
   );
 
   const cancelTwoFactorChallenge = useCallback(() => {
@@ -849,7 +1103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }));
       }
     },
-    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState]
+    [persistSession, resetTwoFactorRecoveryState, twoFactorChallengeState],
   );
 
   const value = useMemo<AuthContextValue>(
@@ -899,10 +1153,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       twoFactorError,
       twoFactorVerifying,
       twoFactorRecoveryState,
-    ]
+    ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  const suppressSubscriptionUpsell = pathname?.startsWith("/onboarding");
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      {!suppressSubscriptionUpsell ? <SubscriptionUpsellModal /> : null}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

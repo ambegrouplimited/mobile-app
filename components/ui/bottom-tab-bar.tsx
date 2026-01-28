@@ -6,6 +6,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Theme } from '@/constants/theme';
+import { useAuth } from '@/providers/auth-provider';
+import { reminderQuotaAvailable, showReminderQuotaUpsell } from '@/lib/subscription';
 
 const ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   index: 'bar-chart-2',
@@ -25,6 +27,8 @@ const LABELS: Record<string, string> = {
 
 export function BottomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const hasReminderQuota = reminderQuotaAvailable(user?.subscription);
 
   return (
     <View style={[styles.root, { paddingBottom: Math.max(insets.bottom, Theme.spacing.lg) }]}>
@@ -36,6 +40,10 @@ export function BottomTabBar({ state, descriptors, navigation }: BottomTabBarPro
           const tint = isFocused ? Theme.palette.slate : Theme.palette.slateSoft;
 
           const onPress = () => {
+            if (route.name === 'new-reminder' && !hasReminderQuota) {
+              showReminderQuotaUpsell();
+              return;
+            }
             const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
             if (!isFocused && !event.defaultPrevented) {
               void Haptics.selectionAsync();

@@ -64,3 +64,10 @@ export function rescheduleInvoice(id: string, schedule: ReminderSchedulePayload,
     token,
   });
 }
+
+export function deleteInvoice(id: string, token: string) {
+  return apiFetch<void>(`/api/invoices/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}

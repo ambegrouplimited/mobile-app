@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "1075208090534",
+    "project_id": "duesoon-2c4ef",
+    "storage_bucket": "duesoon-2c4ef.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1075208090534:android:d315ac7430e879d26fd567",
+        "android_client_info": {
+          "package_name": "com.duesoon.mobileapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1075208090534-uagfenphpk1nku7g98phdsj93ho1ro61.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2IKSuBcYsHro1hieZVzwQJpJ6ejHTpF0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1075208090534-uagfenphpk1nku7g98phdsj93ho1ro61.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1075208090534-nbdiae7qkq8i1nnn6h72p8b7cs7dqiqo.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.duesoon.mobileapp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

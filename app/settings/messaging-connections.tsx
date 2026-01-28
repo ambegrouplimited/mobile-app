@@ -6,7 +6,15 @@ import * as Linking from "expo-linking";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -15,8 +23,8 @@ import {
   ContactPlatformId,
 } from "@/constants/contact-platforms";
 import { Theme } from "@/constants/theme";
-import { useAuth } from "@/providers/auth-provider";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { useAuth } from "@/providers/auth-provider";
 import { connectChannel, disconnectChannel } from "@/services/channels";
 import {
   connectGmailAccount,
@@ -50,13 +58,14 @@ const OUTLOOK_STATUS_CACHE_KEY = "cache.messaging.outlookStatus";
 const SLACK_STATUS_CACHE_KEY = "cache.messaging.slackStatus";
 const TELEGRAM_STATUS_CACHE_KEY = "cache.messaging.telegramStatus";
 
-function getRedirectUri() {
-  if (ENV_OAUTH_REDIRECT) {
-    return ENV_OAUTH_REDIRECT;
-  }
+function getAppRedirectUri() {
   return AuthSession.makeRedirectUri({
-    scheme: Platform.select({ web: undefined, default: "mobileapp" }),
+    scheme: Platform.select({ web: undefined, default: "ambeduesoon" }),
   });
+}
+
+function getServerRedirectUri() {
+  return ENV_OAUTH_REDIRECT ?? getAppRedirectUri();
 }
 
 function parseQueryParams(url: string): Record<string, string> {
@@ -107,11 +116,17 @@ export default function MessagingConnectionsScreen() {
   });
   const [error, setError] = useState<string | null>(null);
   const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
-  const [outlookStatus, setOutlookStatus] = useState<OutlookStatus | null>(null);
+  const [outlookStatus, setOutlookStatus] = useState<OutlookStatus | null>(
+    null,
+  );
   const [slackStatus, setSlackStatus] = useState<SlackStatus | null>(null);
-  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(
+    null,
+  );
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
-  const telegramChannelStateRef = useRef<boolean | null>(user?.channels?.telegram ?? null);
+  const telegramChannelStateRef = useRef<boolean | null>(
+    user?.channels?.telegram ?? null,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState<{
     id: ContactPlatformId;
@@ -125,34 +140,46 @@ export default function MessagingConnectionsScreen() {
   useEffect(() => {
     let cancelled = false;
     const hydrateFromCache = async () => {
-      const [cachedGmail, cachedOutlook, cachedSlack, cachedTelegram] = await Promise.all([
-        getCachedValue<GmailStatus>(GMAIL_STATUS_CACHE_KEY),
-        getCachedValue<OutlookStatus>(OUTLOOK_STATUS_CACHE_KEY),
-        getCachedValue<SlackStatus>(SLACK_STATUS_CACHE_KEY),
-        getCachedValue<TelegramStatus>(TELEGRAM_STATUS_CACHE_KEY),
-      ]);
+      const [cachedGmail, cachedOutlook, cachedSlack, cachedTelegram] =
+        await Promise.all([
+          getCachedValue<GmailStatus>(GMAIL_STATUS_CACHE_KEY),
+          getCachedValue<OutlookStatus>(OUTLOOK_STATUS_CACHE_KEY),
+          getCachedValue<SlackStatus>(SLACK_STATUS_CACHE_KEY),
+          getCachedValue<TelegramStatus>(TELEGRAM_STATUS_CACHE_KEY),
+        ]);
       if (cancelled) return;
       if (cachedGmail) {
         setGmailStatus(cachedGmail);
         setConnections((prev) =>
-          prev.gmail === cachedGmail.connected ? prev : { ...prev, gmail: Boolean(cachedGmail.connected) }
+          prev.gmail === cachedGmail.connected
+            ? prev
+            : { ...prev, gmail: Boolean(cachedGmail.connected) },
         );
       }
       if (cachedOutlook) {
         setOutlookStatus(cachedOutlook);
         setConnections((prev) =>
-          prev.outlook === cachedOutlook.connected ? prev : { ...prev, outlook: Boolean(cachedOutlook.connected) }
+          prev.outlook === cachedOutlook.connected
+            ? prev
+            : { ...prev, outlook: Boolean(cachedOutlook.connected) },
         );
       }
       if (cachedSlack) {
         setSlackStatus(cachedSlack);
         const connected = (cachedSlack.workspaces?.length ?? 0) > 0;
-        setConnections((prev) => (prev.slack === connected ? prev : { ...prev, slack: connected }));
+        setConnections((prev) =>
+          prev.slack === connected ? prev : { ...prev, slack: connected },
+        );
       }
       if (cachedTelegram) {
         setTelegramStatus(cachedTelegram);
-        const connected = Boolean(cachedTelegram.has_business_connection && cachedTelegram.connection?.connected);
-        setConnections((prev) => (prev.telegram === connected ? prev : { ...prev, telegram: connected }));
+        const connected = Boolean(
+          cachedTelegram.has_business_connection &&
+          cachedTelegram.connection?.connected,
+        );
+        setConnections((prev) =>
+          prev.telegram === connected ? prev : { ...prev, telegram: connected },
+        );
       }
     };
     hydrateFromCache();
@@ -175,7 +202,7 @@ export default function MessagingConnectionsScreen() {
         console.warn("Failed to sync Telegram channel state", err);
       }
     },
-    [updateUserProfile]
+    [updateUserProfile],
   );
 
   const loadGmailStatus = useCallback(async () => {
@@ -252,8 +279,9 @@ export default function MessagingConnectionsScreen() {
       const status = await fetchTelegramStatus(session.accessToken);
       setTelegramStatus(status);
       await setCachedValue(TELEGRAM_STATUS_CACHE_KEY, status);
-      const isConnected =
-        Boolean(status.has_business_connection && status.connection?.connected);
+      const isConnected = Boolean(
+        status.has_business_connection && status.connection?.connected,
+      );
       setConnections((prev) => {
         if (prev.telegram === isConnected) {
           return prev;
@@ -336,7 +364,10 @@ export default function MessagingConnectionsScreen() {
             }
             return parts.join(" · ") || undefined;
           }
-          if (platform.id === "slack" && (slackStatus?.workspaces?.length ?? 0) > 0) {
+          if (
+            platform.id === "slack" &&
+            (slackStatus?.workspaces?.length ?? 0) > 0
+          ) {
             const parts: string[] = [];
             const count = slackStatus.workspaces?.length ?? 0;
             if (count > 0) {
@@ -344,7 +375,10 @@ export default function MessagingConnectionsScreen() {
             }
             return parts.join(" · ") || undefined;
           }
-          if (platform.id === "telegram" && telegramStatus?.connection?.connected) {
+          if (
+            platform.id === "telegram" &&
+            telegramStatus?.connection?.connected
+          ) {
             const username = telegramStatus.connection.telegram_username;
             if (username) {
               return username.startsWith("@") ? username : `@${username}`;
@@ -353,7 +387,7 @@ export default function MessagingConnectionsScreen() {
           return undefined;
         })(),
       })),
-    [connections, gmailStatus, outlookStatus, slackStatus, telegramStatus]
+    [connections, gmailStatus, outlookStatus, slackStatus, telegramStatus],
   );
 
   const toggleConnection = async (id: ContactPlatformId) => {
@@ -381,19 +415,25 @@ export default function MessagingConnectionsScreen() {
           setConnections((prev) => ({ ...prev, gmail: false }));
           setGmailStatus({ connected: false });
         } else {
-          const redirectUri = getRedirectUri();
+          const browserRedirectUri = getAppRedirectUri();
+          const serverRedirectUri = getServerRedirectUri();
+          console.log(
+            "Gmail redirect URI",
+            serverRedirectUri,
+            browserRedirectUri,
+          );
           const status = await fetchGmailStatus(session.accessToken, {
-            redirectUri,
+            redirectUri: serverRedirectUri,
           });
           const onboardingUrl = status.onboarding_url;
           if (!onboardingUrl) {
             throw new Error(
-              "Unable to start the Gmail consent flow. Please try again."
+              "Unable to start the Gmail consent flow. Please try again.",
             );
           }
           const result = await WebBrowser.openAuthSessionAsync(
             onboardingUrl,
-            redirectUri
+            browserRedirectUri,
           );
           if (result.type !== "success" || !result.url) {
             throw new Error("Gmail connection was canceled.");
@@ -403,16 +443,16 @@ export default function MessagingConnectionsScreen() {
           const state = params.state;
           if (!code || !state) {
             throw new Error(
-              "Gmail did not return the required credentials. Please try again."
+              "Gmail did not return the required credentials. Please try again.",
             );
           }
           await connectGmailAccount(
             {
               code,
               state,
-              redirectUri,
+              redirectUri: serverRedirectUri,
             },
-            session.accessToken
+            session.accessToken,
           );
           await updateUserProfile({ channels: { gmail: true } });
           setConnections((prev) => ({ ...prev, gmail: true }));
@@ -422,7 +462,7 @@ export default function MessagingConnectionsScreen() {
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to update Gmail connection."
+            : "Unable to update Gmail connection.",
         );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
@@ -438,19 +478,19 @@ export default function MessagingConnectionsScreen() {
           setConnections((prev) => ({ ...prev, outlook: false }));
           setOutlookStatus({ connected: false });
         } else {
-          const redirectUri = getRedirectUri();
+          const redirectUri = getServerRedirectUri();
           const status = await fetchOutlookStatus(session.accessToken, {
             redirectUri,
           });
           const onboardingUrl = status.onboarding_url;
           if (!onboardingUrl) {
             throw new Error(
-              "Unable to start the Outlook consent flow. Please try again."
+              "Unable to start the Outlook consent flow. Please try again.",
             );
           }
           const result = await WebBrowser.openAuthSessionAsync(
             onboardingUrl,
-            redirectUri
+            redirectUri,
           );
           if (result.type !== "success" || !result.url) {
             throw new Error("Outlook connection was canceled.");
@@ -460,7 +500,7 @@ export default function MessagingConnectionsScreen() {
           const state = params.state;
           if (!code || !state) {
             throw new Error(
-              "Outlook did not return the required credentials. Please try again."
+              "Outlook did not return the required credentials. Please try again.",
             );
           }
           await connectOutlookAccount(
@@ -469,7 +509,7 @@ export default function MessagingConnectionsScreen() {
               state,
               redirectUri,
             },
-            session.accessToken
+            session.accessToken,
           );
           await updateUserProfile({ channels: { outlook: true } });
           setConnections((prev) => ({ ...prev, outlook: true }));
@@ -479,7 +519,7 @@ export default function MessagingConnectionsScreen() {
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to update Outlook connection."
+            : "Unable to update Outlook connection.",
         );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
@@ -492,14 +532,21 @@ export default function MessagingConnectionsScreen() {
         if (connections.slack) {
           router.push("/settings/slack");
         } else {
-          const redirectUri = getRedirectUri();
-          const status = await fetchSlackStatus(session.accessToken, { redirectUri });
+          const redirectUri = getServerRedirectUri();
+          const status = await fetchSlackStatus(session.accessToken, {
+            redirectUri,
+          });
           setSlackStatus(status);
           const onboardingUrl = status.onboarding_url;
           if (!onboardingUrl) {
-            throw new Error("Unable to start the Slack consent flow. Please try again.");
+            throw new Error(
+              "Unable to start the Slack consent flow. Please try again.",
+            );
           }
-          const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+          const result = await WebBrowser.openAuthSessionAsync(
+            onboardingUrl,
+            redirectUri,
+          );
           if (result.type !== "success" || !result.url) {
             throw new Error("Slack connection was canceled.");
           }
@@ -507,7 +554,9 @@ export default function MessagingConnectionsScreen() {
           const code = params.code;
           const state = params.state;
           if (!code || !state) {
-            throw new Error("Slack did not return the required credentials. Please try again.");
+            throw new Error(
+              "Slack did not return the required credentials. Please try again.",
+            );
           }
           await connectSlackAccount(
             {
@@ -522,7 +571,11 @@ export default function MessagingConnectionsScreen() {
           await loadSlackStatus();
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to update Slack connection.");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to update Slack connection.",
+        );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
       }
@@ -546,7 +599,7 @@ export default function MessagingConnectionsScreen() {
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to update Telegram connection."
+            : "Unable to update Telegram connection.",
         );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
@@ -556,7 +609,10 @@ export default function MessagingConnectionsScreen() {
 
     const currentlyConnected = connections[id];
     if (currentlyConnected) {
-      setConfirmDisconnect({ id, label: CONTACT_PLATFORM_INFO[id]?.label ?? id });
+      setConfirmDisconnect({
+        id,
+        label: CONTACT_PLATFORM_INFO[id]?.label ?? id,
+      });
       return;
     }
     setConnections((prev) => ({ ...prev, [id]: !currentlyConnected }));
@@ -571,7 +627,7 @@ export default function MessagingConnectionsScreen() {
       setError(
         err instanceof Error
           ? err.message
-          : "Unable to update connection. Please try again."
+          : "Unable to update connection. Please try again.",
       );
       setConnections((prev) => ({ ...prev, [id]: currentlyConnected }));
     } finally {
@@ -596,14 +652,24 @@ export default function MessagingConnectionsScreen() {
     } finally {
       setRefreshing(false);
     }
-  }, [loadGmailStatus, loadOutlookStatus, loadSlackStatus, loadTelegramStatus, session?.accessToken]);
+  }, [
+    loadGmailStatus,
+    loadOutlookStatus,
+    loadSlackStatus,
+    loadTelegramStatus,
+    session?.accessToken,
+  ]);
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Theme.palette.ink} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={Theme.palette.ink}
+          />
         }
       >
         <Pressable style={styles.backLink} onPress={() => router.back()}>
@@ -642,7 +708,7 @@ export default function MessagingConnectionsScreen() {
                   platform.connected && styles.connectedRow,
                 ]}
               >
-              <View style={styles.platformInfo}>
+                <View style={styles.platformInfo}>
                   <View style={styles.iconCircle}>
                     {platform.info.assetUri ? (
                       <Image
@@ -651,7 +717,11 @@ export default function MessagingConnectionsScreen() {
                         contentFit="contain"
                       />
                     ) : (
-                      <Feather name="mail" size={18} color={Theme.palette.ink} />
+                      <Feather
+                        name="mail"
+                        size={18}
+                        color={Theme.palette.ink}
+                      />
                     )}
                   </View>
                   <View style={styles.textGroup}>
@@ -706,7 +776,8 @@ export default function MessagingConnectionsScreen() {
                           styles.telegramStepIndicator,
                           (telegramFlowActive || telegramStarted) &&
                             styles.telegramStepIndicatorActive,
-                          telegramStarted && styles.telegramStepIndicatorComplete,
+                          telegramStarted &&
+                            styles.telegramStepIndicatorComplete,
                         ]}
                       >
                         {telegramStarted ? (
@@ -716,9 +787,12 @@ export default function MessagingConnectionsScreen() {
                         )}
                       </View>
                       <View style={styles.telegramStepTextGroup}>
-                        <Text style={styles.telegramStepTitle}>Start the bot</Text>
+                        <Text style={styles.telegramStepTitle}>
+                          Start the bot
+                        </Text>
                         <Text style={styles.telegramStepDescription}>
-                          Tap Connect to open Telegram and press Start inside DueSoon Bot.
+                          Tap Connect to open Telegram and press Start inside
+                          DueSoon Bot.
                         </Text>
                         {!telegramStarted ? (
                           <Pressable
@@ -730,7 +804,9 @@ export default function MessagingConnectionsScreen() {
                                 styles.telegramLinkDisabled,
                             ]}
                           >
-                            <Text style={styles.telegramLinkText}>Open Telegram</Text>
+                            <Text style={styles.telegramLinkText}>
+                              Open Telegram
+                            </Text>
                           </Pressable>
                         ) : null}
                       </View>
@@ -752,28 +828,32 @@ export default function MessagingConnectionsScreen() {
                         )}
                       </View>
                       <View style={styles.telegramStepTextGroup}>
-                        <Text style={styles.telegramStepTitle}>Connect to Business</Text>
+                        <Text style={styles.telegramStepTitle}>
+                          Connect to Business
+                        </Text>
                         <Text style={styles.telegramStepDescription}>
-                          Add DueSoon under Telegram Business → Linked Bots with “Can Reply”.
+                          Add DueSoon under Telegram Business
                         </Text>
                         {showBusinessChecklist ? (
                           <View style={styles.telegramInstructionList}>
                             <View style={styles.telegramInstructionItem}>
                               <View style={styles.telegramInstructionBullet} />
                               <Text style={styles.telegramInstructionText}>
-                                Open Telegram Settings → Business tools.
+                                Open Telegram Settings → Telegram Business.
                               </Text>
                             </View>
                             <View style={styles.telegramInstructionItem}>
                               <View style={styles.telegramInstructionBullet} />
                               <Text style={styles.telegramInstructionText}>
-                                Choose Linked Bots, tap Add bot, and select DueSoon.
+                                Enter Chatbots, Enter Bot User Name
+                                (duesoon_reminder_bot). Click Add.
                               </Text>
                             </View>
                             <View style={styles.telegramInstructionItem}>
                               <View style={styles.telegramInstructionBullet} />
                               <Text style={styles.telegramInstructionText}>
-                                Enable “Can Reply” so reminders can send from DueSoon.
+                                Make sure to exit the Chatbots page on Telegram
+                                for Bot To Activate.
                               </Text>
                             </View>
                           </View>
@@ -790,9 +870,12 @@ export default function MessagingConnectionsScreen() {
       {confirmDisconnect ? (
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Disconnect {confirmDisconnect.label}?</Text>
+            <Text style={styles.confirmTitle}>
+              Disconnect {confirmDisconnect.label}?
+            </Text>
             <Text style={styles.confirmDetail}>
-              We’ll stop sending reminders via {confirmDisconnect.label} until you connect it again.
+              We’ll stop sending reminders via {confirmDisconnect.label} until
+              you connect it again.
             </Text>
             <View style={styles.confirmActions}>
               <Pressable
@@ -809,23 +892,31 @@ export default function MessagingConnectionsScreen() {
                   setBusy((prev) => ({ ...prev, [id]: true }));
                   try {
                     if (!session?.accessToken) {
-                      throw new Error("You need to be signed in to manage connections.");
+                      throw new Error(
+                        "You need to be signed in to manage connections.",
+                      );
                     }
                     if (id === "gmail") {
                       await disconnectGmailAccount(session.accessToken);
                       await updateUserProfile({ channels: { gmail: false } });
                       setConnections((prev) => ({ ...prev, gmail: false }));
                       setGmailStatus({ connected: false });
-                      await setCachedValue(GMAIL_STATUS_CACHE_KEY, { connected: false });
+                      await setCachedValue(GMAIL_STATUS_CACHE_KEY, {
+                        connected: false,
+                      });
                     } else if (id === "outlook") {
                       await disconnectOutlookAccount(session.accessToken);
                       await updateUserProfile({ channels: { outlook: false } });
                       setConnections((prev) => ({ ...prev, outlook: false }));
                       setOutlookStatus({ connected: false });
-                      await setCachedValue(OUTLOOK_STATUS_CACHE_KEY, { connected: false });
+                      await setCachedValue(OUTLOOK_STATUS_CACHE_KEY, {
+                        connected: false,
+                      });
                     } else if (id === "telegram") {
                       await disconnectTelegram(session.accessToken);
-                      await updateUserProfile({ channels: { telegram: false } });
+                      await updateUserProfile({
+                        channels: { telegram: false },
+                      });
                       telegramChannelStateRef.current = false;
                       setConnections((prev) => ({ ...prev, telegram: false }));
                       setTelegramStatus({
@@ -849,7 +940,7 @@ export default function MessagingConnectionsScreen() {
                     setError(
                       error instanceof Error
                         ? error.message
-                        : "Unable to disconnect. Please try again."
+                        : "Unable to disconnect. Please try again.",
                     );
                   } finally {
                     setBusy((prev) => ({ ...prev, [id]: false }));

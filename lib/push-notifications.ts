@@ -1,16 +1,9 @@
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import Constants from "expo-constants";
 
-import { PushPlatform } from "@/services/notifications";
-
-type DevicePushToken = {
-  token: string;
-  platform: PushPlatform;
-};
-
-export async function requestDevicePushToken(): Promise<DevicePushToken | null> {
-  if (!Device.isDevice) {
+export async function requestExpoPushToken(): Promise<string | null> {
+  if (!Device.isDevice && !__DEV__) {
     return null;
   }
   let permissions = await Notifications.getPermissionsAsync();
@@ -20,7 +13,15 @@ export async function requestDevicePushToken(): Promise<DevicePushToken | null> 
   if (permissions.status !== "granted") {
     return null;
   }
-  const pushToken = await Notifications.getDevicePushTokenAsync();
-  const platform: PushPlatform = Platform.OS === "android" ? "android" : Platform.OS === "ios" ? "ios" : "web";
-  return { token: pushToken.data, platform };
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId ??
+    Constants.easConfig?.projectId;
+  if (!projectId) {
+    console.warn("Expo projectId not found; cannot register push token.");
+    return null;
+  }
+  const expoToken = await Notifications.getExpoPushTokenAsync({ projectId });
+  return expoToken.data ?? null;
 }
+
+export const requestDevicePushToken = requestExpoPushToken;

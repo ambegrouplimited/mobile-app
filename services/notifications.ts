@@ -1,8 +1,6 @@
 import { apiFetch } from "@/lib/api-client";
 
-export type PushPlatform = "ios" | "android" | "web";
-
-export function registerPushToken(payload: { token: string; platform: PushPlatform }, authToken: string) {
+export function registerPushToken(payload: { token: string }, authToken: string) {
   return apiFetch<void>("/api/notifications/token", {
     method: "POST",
     body: payload,

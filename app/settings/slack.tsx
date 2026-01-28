@@ -1,10 +1,18 @@
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
 import * as AuthSession from "expo-auth-session";
 import * as Linking from "expo-linking";
+import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
@@ -30,7 +38,7 @@ function getRedirectUri() {
     return ENV_REDIRECT;
   }
   return AuthSession.makeRedirectUri({
-    scheme: "mobileapp",
+    scheme: "ambeduesoon",
   });
 }
 
@@ -63,7 +71,8 @@ export default function SlackDetailsScreen() {
   const router = useRouter();
   const { session } = useAuth();
   const [status, setStatus] = useState<SlackStatus | null>(null);
-  const [selectedWorkspace, setSelectedWorkspace] = useState<SlackWorkspace | null>(null);
+  const [selectedWorkspace, setSelectedWorkspace] =
+    useState<SlackWorkspace | null>(null);
   const [conversations, setConversations] = useState<SlackConversation[]>([]);
   const [users, setUsers] = useState<SlackUser[]>([]);
   const [loading, setLoading] = useState(false);
@@ -87,7 +96,9 @@ export default function SlackDetailsScreen() {
         return response.workspaces[0] ?? null;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load Slack data.");
+      setError(
+        err instanceof Error ? err.message : "Unable to load Slack data.",
+      );
     } finally {
       setLoading(false);
     }
@@ -113,7 +124,9 @@ export default function SlackDetailsScreen() {
         setUsers(members);
         setSelectedWorkspace(workspace);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to load workspace data.");
+        setError(
+          err instanceof Error ? err.message : "Unable to load workspace data.",
+        );
       } finally {
         setBrowsing(false);
       }
@@ -128,12 +141,17 @@ export default function SlackDetailsScreen() {
     setError(null);
     try {
       const redirectUri = getRedirectUri();
-      const response = await fetchSlackStatus(session.accessToken, { redirectUri });
+      const response = await fetchSlackStatus(session.accessToken, {
+        redirectUri,
+      });
       const onboardingUrl = response.onboarding_url;
       if (!onboardingUrl) {
         throw new Error("Unable to start Slack consent flow.");
       }
-      const result = await WebBrowser.openAuthSessionAsync(onboardingUrl, redirectUri);
+      const result = await WebBrowser.openAuthSessionAsync(
+        onboardingUrl,
+        redirectUri,
+      );
       if (result.type !== "success" || !result.url) {
         throw new Error("Slack connection was canceled.");
       }
@@ -154,7 +172,11 @@ export default function SlackDetailsScreen() {
       await loadStatus();
       await loadWorkspaceData(workspace);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to connect Slack workspace.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to connect Slack workspace.",
+      );
     }
   }, [loadStatus, loadWorkspaceData, session?.accessToken]);
 
@@ -173,7 +195,11 @@ export default function SlackDetailsScreen() {
           setUsers([]);
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to disconnect workspace.");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to disconnect workspace.",
+        );
       }
     },
     [loadStatus, selectedWorkspace, session?.accessToken],
@@ -202,7 +228,11 @@ export default function SlackDetailsScreen() {
       <ScrollView
         contentContainerStyle={styles.container}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Theme.palette.ink} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={Theme.palette.ink}
+          />
         }
       >
         <View style={styles.header}>
@@ -218,7 +248,11 @@ export default function SlackDetailsScreen() {
           </Text>
         </View>
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Pressable style={styles.connectButton} onPress={connectWorkspace} disabled={loading}>
+        <Pressable
+          style={styles.connectButton}
+          onPress={connectWorkspace}
+          disabled={loading}
+        >
           <Text style={styles.connectButtonText}>Connect new workspace</Text>
         </Pressable>
         <View style={styles.section}>
@@ -229,19 +263,32 @@ export default function SlackDetailsScreen() {
             workspaces.map((workspace) => (
               <View key={workspace.team_id} style={styles.workspaceCard}>
                 <View style={styles.workspaceInfo}>
-                  <Text style={styles.workspaceName}>{workspace.team_name ?? workspace.team_id}</Text>
+                  <Text style={styles.workspaceName}>
+                    {workspace.team_name ?? workspace.team_id}
+                  </Text>
                   <Text style={styles.workspaceDetail}>
                     Signed in as {workspace.authed_user_id ?? "user"}{" "}
-                    {workspace.expires_at ? `· Expires ${new Date(workspace.expires_at).toLocaleDateString()}` : ""}
+                    {workspace.expires_at
+                      ? `· Expires ${new Date(workspace.expires_at).toLocaleDateString()}`
+                      : ""}
                   </Text>
                 </View>
                 <View style={styles.workspaceActions}>
-                  <Pressable style={styles.secondaryButton} onPress={() => loadWorkspaceData(workspace)}>
+                  <Pressable
+                    style={styles.secondaryButton}
+                    onPress={() => loadWorkspaceData(workspace)}
+                  >
                     <Text style={styles.secondaryButtonText}>
-                      {browsing && selectedWorkspace?.team_id === workspace.team_id ? "Loading…" : "Browse"}
+                      {browsing &&
+                      selectedWorkspace?.team_id === workspace.team_id
+                        ? "Loading…"
+                        : "Browse"}
                     </Text>
                   </Pressable>
-                  <Pressable style={styles.disconnectButton} onPress={() => disconnectWorkspace(workspace)}>
+                  <Pressable
+                    style={styles.disconnectButton}
+                    onPress={() => disconnectWorkspace(workspace)}
+                  >
                     <Text style={styles.disconnectText}>Disconnect</Text>
                   </Pressable>
                 </View>
@@ -263,10 +310,14 @@ export default function SlackDetailsScreen() {
                 renderItem={({ item }) => (
                   <View style={styles.listItem}>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemDetail}>{`${item.type}${item.is_private ? " · private" : ""}`}</Text>
+                    <Text
+                      style={styles.itemDetail}
+                    >{`${item.type}${item.is_private ? " · private" : ""}`}</Text>
                   </View>
                 )}
-                ListEmptyComponent={<Text style={styles.emptyText}>No conversations found.</Text>}
+                ListEmptyComponent={
+                  <Text style={styles.emptyText}>No conversations found.</Text>
+                }
               />
               <Text style={styles.listLabel}>People</Text>
               <FlatList
@@ -276,18 +327,24 @@ export default function SlackDetailsScreen() {
                 contentContainerStyle={styles.list}
                 renderItem={({ item }) => (
                   <View style={styles.listItem}>
-                    <Text style={styles.itemName}>{item.real_name || item.name}</Text>
+                    <Text style={styles.itemName}>
+                      {item.real_name || item.name}
+                    </Text>
                     <Text style={styles.itemDetail}>
                       {item.display_name || item.name}
                       {item.is_bot ? " · Bot" : ""}
                     </Text>
                   </View>
                 )}
-                ListEmptyComponent={<Text style={styles.emptyText}>No users found.</Text>}
+                ListEmptyComponent={
+                  <Text style={styles.emptyText}>No users found.</Text>
+                }
               />
             </>
           ) : (
-            <Text style={styles.emptyText}>Select a workspace above to browse details.</Text>
+            <Text style={styles.emptyText}>
+              Select a workspace above to browse details.
+            </Text>
           )}
         </View>
       </ScrollView>

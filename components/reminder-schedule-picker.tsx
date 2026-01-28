@@ -630,7 +630,10 @@ function addMonths(value: Date, delta: number) {
 }
 
 function formatISODate(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatReadableDate(value: string) {
@@ -684,7 +687,9 @@ function parseTimeToDate(value: string) {
 }
 
 function formatTimeFromDate(date: Date) {
-  return date.toISOString().slice(11, 16);
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 function formatTimeLabel(value: string) {
@@ -899,7 +904,7 @@ const styles = StyleSheet.create({
   weekdayChip: {
     paddingVertical: Theme.spacing.xs,
     paddingHorizontal: Theme.spacing.md,
-    borderRadius: Theme.radii.full,
+    borderRadius: Theme.radii.lg,
     borderWidth: 1,
     borderColor: Theme.palette.border,
   },

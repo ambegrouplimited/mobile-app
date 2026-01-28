@@ -4,6 +4,7 @@ import type {
   ConversationSummary,
   MessageSendPayload,
   MessageSendResponse,
+  QuickReplyResponse,
 } from "@/types/messages";
 
 export function fetchClientMessages(
@@ -42,4 +43,18 @@ export function sendClientMessage(
     body: payload,
     token,
   });
+}
+
+export function fetchQuickReplies(
+  clientId: string,
+  token: string,
+  params: { contactMethodId?: string }
+) {
+  const query = toQueryString({
+    contact_method_id: params.contactMethodId,
+  });
+  return apiFetch<QuickReplyResponse>(
+    `/api/messages/clients/${clientId}/quick-replies${query}`,
+    { token }
+  );
 }

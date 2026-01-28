@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   GestureResponderEvent,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -26,6 +27,7 @@ import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor"
 import { getContactSummary, resolvePlatformFromMethod } from "@/lib/contact-methods";
 import { formatDueDateLabel, formatISODate, parseISOToDate } from "@/lib/date";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { reminderQuotaAvailable, reminderQuotaRemaining, showReminderQuotaUpsell } from "@/lib/subscription";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchClients } from "@/services/clients";
 import { fetchCurrencies } from "@/services/currencies";
@@ -89,6 +91,9 @@ export default function NewReminderScreen() {
     return missing;
   }, [dueDate, notes]);
   const [savedClientSearch, setSavedClientSearch] = useState("");
+  const remindersRemaining = reminderQuotaRemaining(user?.subscription);
+  const isOutOfReminders = remindersRemaining === 0;
+  const [quotaNoticeShown, setQuotaNoticeShown] = useState(false);
 
   const hasDraftDetails =
     Boolean(client.trim()) ||
@@ -144,6 +149,15 @@ export default function NewReminderScreen() {
     lastPath: "/(tabs)/new-reminder",
     enabled: Boolean(session?.accessToken) && hasDraftDetails,
   });
+
+  useEffect(() => {
+    if (isOutOfReminders && !quotaNoticeShown) {
+      showReminderQuotaUpsell();
+      setQuotaNoticeShown(true);
+    } else if (!isOutOfReminders && quotaNoticeShown) {
+      setQuotaNoticeShown(false);
+    }
+  }, [isOutOfReminders, quotaNoticeShown]);
 
   useEffect(() => {
     let cancelled = false;
@@ -377,10 +391,10 @@ export default function NewReminderScreen() {
   };
 
   useEffect(() => {
-    if (scheduleError && canSchedule) {
+    if (scheduleError && canSchedule && !isOutOfReminders) {
       setScheduleError(null);
     }
-  }, [scheduleError, canSchedule]);
+  }, [scheduleError, canSchedule, isOutOfReminders]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -499,11 +513,18 @@ export default function NewReminderScreen() {
         </View>
 
         <Pressable
-          style={[styles.primaryButton, !canSchedule && styles.primaryButtonDisabled]}
-          disabled={!canSchedule}
+          style={[
+            styles.primaryButton,
+            (!canSchedule || isOutOfReminders) && styles.primaryButtonDisabled,
+          ]}
+          disabled={!canSchedule || isOutOfReminders}
           onPress={async () => {
             if (!canSchedule) {
               setScheduleError("Enter the client name and amount before continuing.");
+              return;
+            }
+            if (isOutOfReminders) {
+              showReminderQuotaUpsell();
               return;
             }
             setScheduleError(null);
@@ -528,6 +549,12 @@ export default function NewReminderScreen() {
           <Text style={styles.primaryButtonText}>Schedule reminder</Text>
         </Pressable>
         {scheduleError ? <Text style={styles.errorText}>{scheduleError}</Text> : null}
+        {isOutOfReminders ? (
+          <Text style={styles.errorText}>
+            You don't have any free reminders left this month. Subscribe to DueSoon Pro to keep
+            scheduling follow-ups.
+          </Text>
+        ) : null}
 
         <SavedClientsSection
           clients={filteredSavedClients}
@@ -544,13 +571,12 @@ export default function NewReminderScreen() {
           searchPlaceholder="Search saved clients"
         />
       </ScrollView>
-      <Modal
-        transparent
-        visible={currencyPickerVisible}
-        animationType="fade"
-        onRequestClose={closeCurrencyPicker}
-      >
-        <View style={styles.currencyOverlay}>
+      <Modal transparent visible={currencyPickerVisible} animationType="fade" onRequestClose={closeCurrencyPicker}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.currencyOverlay}
+        >
+          <Pressable style={styles.currencyBackdrop} onPress={closeCurrencyPicker} />
           <View style={styles.currencyModal}>
             <View style={styles.currencyModalHeader}>
               <Text style={styles.currencyModalTitle}>Select currency</Text>
@@ -601,7 +627,7 @@ export default function NewReminderScreen() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
       <MissingDetailsModal
         visible={quickPickModalVisible}
@@ -907,10 +933,13 @@ const styles = StyleSheet.create({
   },
   currencyOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "center",
     alignItems: "center",
     padding: Theme.spacing.lg,
+  },
+  currencyBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
   },
   currencyModal: {
     width: "100%",

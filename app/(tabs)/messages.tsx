@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { getContactPlatformInfo } from "@/constants/contact-platforms";
 import { Theme } from "@/constants/theme";
 import { getCachedValue, setCachedValue } from "@/lib/cache";
+import { openSubscriptionUpsell } from "@/lib/subscription-upsell";
 import { useAuth } from "@/providers/auth-provider";
 import { fetchConversationSummaries } from "@/services/messages";
 import { subscribeToMessageEvents } from "@/lib/message-stream";
@@ -26,12 +27,15 @@ const CONVERSATION_CACHE_KEY = "cache.messages.conversations";
 
 export default function MessagesScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const messagingAllowed = Boolean(
+    user?.subscription?.is_active || user?.subscription?.is_trialing
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +91,7 @@ export default function MessagesScreen() {
   }, [loadConversations]);
 
   useEffect(() => {
-    if (!session?.accessToken) {
+    if (!session?.accessToken || !messagingAllowed) {
       return;
     }
     const unsubscribe = subscribeToMessageEvents(
@@ -99,7 +103,7 @@ export default function MessagesScreen() {
     return () => {
       unsubscribe();
     };
-  }, [session?.accessToken, loadConversations]);
+  }, [session?.accessToken, messagingAllowed, loadConversations]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -109,6 +113,10 @@ export default function MessagesScreen() {
 
   const handleOpenConversation = useCallback(
     (conversation: ConversationSummary) => {
+      if (!messagingAllowed) {
+        openSubscriptionUpsell("Messaging threads are available on DueSoon Pro.");
+        return;
+      }
       router.push({
         pathname: `/messages/${conversation.client_id}`,
         params: {
@@ -119,7 +127,7 @@ export default function MessagesScreen() {
         },
       });
     },
-    [router]
+    [messagingAllowed, router]
   );
 
   const filteredConversations = useMemo(() => {
@@ -157,6 +165,28 @@ export default function MessagesScreen() {
         <Text style={styles.pageSubtitle}>
           Latest messages across all channels.
         </Text>
+        {!messagingAllowed ? (
+          <View style={styles.lockedBanner}>
+            <View style={styles.lockedBannerText}>
+              <Text style={styles.lockedBannerTitle}>Messaging is locked</Text>
+              <Text style={styles.lockedBannerSubtitle}>
+                DueSoon Pro unlocks messaging across Gmail, Slack, WhatsApp,
+                and more.
+              </Text>
+            </View>
+            <Pressable
+              style={styles.lockedBannerButton}
+              onPress={() =>
+                openSubscriptionUpsell(
+                  "Messaging threads are available on DueSoon Pro.",
+                  { headline: "Unlock messaging" }
+                )
+              }
+            >
+              <Text style={styles.lockedBannerButtonLabel}>Learn more</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.searchField}>
           <Feather name="search" size={16} color={Theme.palette.slate} />
@@ -269,6 +299,40 @@ const styles = StyleSheet.create({
   pageSubtitle: {
     fontSize: 15,
     color: Theme.palette.slate,
+  },
+  lockedBanner: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.lg,
+    backgroundColor: Theme.palette.surface,
+    padding: Theme.spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.md,
+  },
+  lockedBannerText: {
+    flex: 1,
+    gap: 4,
+  },
+  lockedBannerTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: Theme.palette.ink,
+  },
+  lockedBannerSubtitle: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+  },
+  lockedBannerButton: {
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    borderRadius: Theme.radii.md,
+    backgroundColor: Theme.palette.ink,
+  },
+  lockedBannerButtonLabel: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "600",
   },
   searchField: {
     flexDirection: "row",

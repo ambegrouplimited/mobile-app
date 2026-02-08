@@ -37,7 +37,7 @@ export type WhatsAppStatus = {
 
 export type WhatsAppOnboardingPayload = {
   state: string;
-  phone_number: string;
+  phone_number?: string | null;
   display_name?: string | null;
   business_name?: string | null;
   waba_id?: string | null;

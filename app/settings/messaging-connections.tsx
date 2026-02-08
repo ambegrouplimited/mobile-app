@@ -129,8 +129,8 @@ type WhatsAppPending = {
   state: string;
   code: string;
   wabaId?: string | null;
-  phoneNumberId: string;
-  phoneNumber: string;
+  phoneNumberId?: string | null;
+  phoneNumber?: string | null;
   displayName?: string | null;
   businessName?: string | null;
 };
@@ -407,30 +407,29 @@ export default function MessagingConnectionsScreen() {
     const state =
       params.state ?? account?.embedded_signup_state ?? whatsappStatus?.account?.embedded_signup_state ?? "";
     const meta = decodeMetaPayload(params.meta);
-    const wabaId = params.waba_id ?? (meta?.waba_id as string | undefined);
+    const wabaId = params.waba_id ?? (meta?.waba_id as string | undefined) ?? null;
     const phoneNumberId =
       params.phone_number_id ??
       (meta?.phone_number_id as string | undefined) ??
-      (meta?.id as string | undefined);
+      (meta?.id as string | undefined) ??
+      null;
     const phoneNumber =
       params.phone_number ??
       (meta?.phone_number as string | undefined) ??
       (meta?.display_phone_number as string | undefined) ??
-      "";
+      null;
     const displayName =
       params.display_name ??
       (meta?.display_name as string | undefined) ??
       (meta?.verified_name as string | undefined) ??
-      "";
+      null;
     const businessName =
       params.business_name ??
       (meta?.business_name as string | undefined) ??
       displayName ??
-      "";
-    if (!code || !state || !phoneNumberId || !phoneNumber || !wabaId) {
-      throw new Error(
-        "WhatsApp did not return the required identifiers. Please try again.",
-      );
+      null;
+    if (!code || !state) {
+      throw new Error("WhatsApp did not return the authorization code.");
     }
     setWhatsappPending({
       code,

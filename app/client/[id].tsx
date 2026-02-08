@@ -132,7 +132,8 @@ export default function ClientDetailScreen() {
   const toggleCollapse = useCallback(
     (invoiceId: string) => {
       setCollapsedInvoices((prev) => {
-        const next = { ...prev, [invoiceId]: !prev[invoiceId] };
+        const currentlyCollapsed = prev[invoiceId] ?? true;
+        const next = { ...prev, [invoiceId]: !currentlyCollapsed };
         void persistCollapseState(next);
         return next;
       });
@@ -568,7 +569,7 @@ export default function ClientDetailScreen() {
               const rescheduleInfoCopy =
                 "Overdue means there are no reminders left. Reschedule to queue a fresh follow-up plan.";
               const showSplitResumeActions = canPauseResume && isPaused;
-              const isCollapsed = Boolean(collapsedInvoices[invoice.id]);
+              const isCollapsed = collapsedInvoices[invoice.id] ?? true;
               return (
                 <View key={invoice.id} style={styles.reminderBlock}>
                   <View style={styles.reminderHeader}>

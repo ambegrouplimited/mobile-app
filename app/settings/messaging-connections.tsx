@@ -5,14 +5,19 @@ import { Image } from "expo-image";
 import * as Linking from "expo-linking";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
+import { Buffer } from "buffer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -48,15 +53,28 @@ import {
   fetchTelegramStatus,
   TelegramStatus,
 } from "@/services/telegram";
+import {
+  completeWhatsAppOnboarding,
+  disconnectWhatsApp,
+  fetchWhatsAppStatus,
+  initiateWhatsAppConnect,
+  WhatsAppStatus,
+} from "@/services/whatsapp";
 
 WebBrowser.maybeCompleteAuthSession();
 
 const ENV_OAUTH_REDIRECT = process.env.EXPO_PUBLIC_GMAIL_REDIRECT_URL;
 
+if (typeof globalThis.Buffer === "undefined") {
+  // @ts-expect-error Buffer is polyfilled at runtime for React Native.
+  globalThis.Buffer = Buffer;
+}
+
 const GMAIL_STATUS_CACHE_KEY = "cache.messaging.gmailStatus";
 const OUTLOOK_STATUS_CACHE_KEY = "cache.messaging.outlookStatus";
 const SLACK_STATUS_CACHE_KEY = "cache.messaging.slackStatus";
 const TELEGRAM_STATUS_CACHE_KEY = "cache.messaging.telegramStatus";
+const DEFAULT_WHATSAPP_REFRESH_THRESHOLD_DAYS = 7;
 
 function getAppRedirectUri() {
   return AuthSession.makeRedirectUri({
@@ -93,6 +111,30 @@ function parseQueryParams(url: string): Record<string, string> {
   }
 }
 
+function decodeMetaPayload(
+  value?: string | null,
+): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const raw = Buffer.from(value, "base64").toString("utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+type WhatsAppPending = {
+  state: string;
+  code: string;
+  wabaId?: string | null;
+  phoneNumberId: string;
+  phoneNumber: string;
+  displayName?: string | null;
+  businessName?: string | null;
+};
+
 export default function MessagingConnectionsScreen() {
   const router = useRouter();
   const { user, session, updateUserProfile } = useAuth();
@@ -124,6 +166,16 @@ export default function MessagingConnectionsScreen() {
     null,
   );
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
+  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus | null>(
+    null,
+  );
+  const [whatsappPending, setWhatsappPending] = useState<WhatsAppPending | null>(
+    null,
+  );
+  const [showWhatsappPinModal, setShowWhatsappPinModal] = useState(false);
+  const [whatsappPin, setWhatsappPin] = useState("");
+  const [whatsappPinError, setWhatsappPinError] = useState<string | null>(null);
+  const [whatsappPinSubmitting, setWhatsappPinSubmitting] = useState(false);
   const telegramChannelStateRef = useRef<boolean | null>(
     user?.channels?.telegram ?? null,
   );
@@ -225,6 +277,28 @@ export default function MessagingConnectionsScreen() {
     loadGmailStatus();
   }, [loadGmailStatus]);
 
+  const loadWhatsappStatus = useCallback(async () => {
+    if (!session?.accessToken) {
+      return null;
+    }
+    try {
+      const status = await fetchWhatsAppStatus(session.accessToken);
+      setWhatsappStatus(status);
+      const connected = Boolean(status.account?.connected);
+      setConnections((prev) =>
+        prev.whatsapp === connected ? prev : { ...prev, whatsapp: connected },
+      );
+      return status;
+    } catch (err) {
+      console.warn("Failed to load WhatsApp status", err);
+      return null;
+    }
+  }, [session?.accessToken]);
+
+  useEffect(() => {
+    loadWhatsappStatus();
+  }, [loadWhatsappStatus]);
+
   const loadOutlookStatus = useCallback(async () => {
     if (!session?.accessToken) {
       return;
@@ -300,6 +374,130 @@ export default function MessagingConnectionsScreen() {
     loadTelegramStatus();
   }, [loadTelegramStatus]);
 
+  const startWhatsappOnboarding = useCallback(async () => {
+    if (!session?.accessToken) {
+      throw new Error("You need to be signed in to connect WhatsApp.");
+    }
+    const serverRedirectUri = getServerRedirectUri();
+    const appRedirectUri = getAppRedirectUri();
+    const account = await initiateWhatsAppConnect(
+      session.accessToken,
+      serverRedirectUri,
+    );
+    const onboardingUrl =
+      account?.onboarding_url ?? whatsappStatus?.onboarding_url;
+    if (!onboardingUrl) {
+      throw new Error(
+        "Unable to start WhatsApp signup. Please try again in a moment.",
+      );
+    }
+    const result = await WebBrowser.openAuthSessionAsync(
+      onboardingUrl,
+      appRedirectUri,
+    );
+    if (result.type !== "success" || !result.url) {
+      throw new Error("WhatsApp connection was canceled.");
+    }
+    const params = parseQueryParams(result.url);
+    const event = (params.event ?? "").toUpperCase();
+    if (event === "CANCEL") {
+      throw new Error("WhatsApp signup was canceled.");
+    }
+    const code = params.code;
+    const state =
+      params.state ?? account?.embedded_signup_state ?? whatsappStatus?.account?.embedded_signup_state ?? "";
+    const meta = decodeMetaPayload(params.meta);
+    const wabaId = params.waba_id ?? (meta?.waba_id as string | undefined);
+    const phoneNumberId =
+      params.phone_number_id ??
+      (meta?.phone_number_id as string | undefined) ??
+      (meta?.id as string | undefined);
+    const phoneNumber =
+      params.phone_number ??
+      (meta?.phone_number as string | undefined) ??
+      (meta?.display_phone_number as string | undefined) ??
+      "";
+    const displayName =
+      params.display_name ??
+      (meta?.display_name as string | undefined) ??
+      (meta?.verified_name as string | undefined) ??
+      "";
+    const businessName =
+      params.business_name ??
+      (meta?.business_name as string | undefined) ??
+      displayName ??
+      "";
+    if (!code || !state || !phoneNumberId || !phoneNumber || !wabaId) {
+      throw new Error(
+        "WhatsApp did not return the required identifiers. Please try again.",
+      );
+    }
+    setWhatsappPending({
+      code,
+      state,
+      wabaId,
+      phoneNumberId,
+      phoneNumber,
+      displayName: displayName || phoneNumber,
+      businessName: businessName || displayName || phoneNumber,
+    });
+    setWhatsappPin("");
+    setWhatsappPinError(null);
+    setShowWhatsappPinModal(true);
+  }, [session?.accessToken, whatsappStatus]);
+
+  const closeWhatsappModal = useCallback(() => {
+    setShowWhatsappPinModal(false);
+    setWhatsappPending(null);
+    setWhatsappPin("");
+    setWhatsappPinError(null);
+  }, []);
+
+  const submitWhatsappPin = useCallback(async () => {
+    if (!session?.accessToken || !whatsappPending) {
+      return;
+    }
+    if (whatsappPin.length !== 6) {
+      setWhatsappPinError("Enter the 6-digit PIN you set during signup.");
+      return;
+    }
+    try {
+      setWhatsappPinSubmitting(true);
+      await completeWhatsAppOnboarding(
+        {
+          state: whatsappPending.state,
+          code: whatsappPending.code,
+          pin: whatsappPin,
+          phone_number: whatsappPending.phoneNumber,
+          phone_number_id: whatsappPending.phoneNumberId,
+          waba_id: whatsappPending.wabaId,
+          display_name: whatsappPending.displayName,
+          business_name: whatsappPending.businessName,
+        },
+        session.accessToken,
+      );
+      await updateUserProfile({ channels: { whatsapp: true } });
+      setConnections((prev) => ({ ...prev, whatsapp: true }));
+      await loadWhatsappStatus();
+      closeWhatsappModal();
+    } catch (err) {
+      setWhatsappPinError(
+        err instanceof Error
+          ? err.message
+          : "Unable to finish WhatsApp onboarding. Please try again.",
+      );
+    } finally {
+      setWhatsappPinSubmitting(false);
+    }
+  }, [
+    closeWhatsappModal,
+    loadWhatsappStatus,
+    session?.accessToken,
+    updateUserProfile,
+    whatsappPending,
+    whatsappPin,
+  ]);
+
   const openTelegramOnboarding = useCallback(async () => {
     const latestStatus = telegramStatus ?? (await loadTelegramStatus());
     const onboardingUrl =
@@ -343,6 +541,34 @@ export default function MessagingConnectionsScreen() {
     })}`;
   };
 
+  const whatsappExpiry = useMemo(() => {
+    const iso = whatsappStatus?.account?.access_token_expires_at;
+    if (!iso) {
+      return { daysUntil: null, expired: false } as const;
+    }
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return { daysUntil: null, expired: false } as const;
+    }
+    const diffMs = date.getTime() - Date.now();
+    const daysUntil = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return { daysUntil, expired: daysUntil <= 0 } as const;
+  }, [whatsappStatus?.account?.access_token_expires_at]);
+
+  const whatsappWarningThreshold = useMemo(() => {
+    return (
+      whatsappStatus?.token_warning_days ?? DEFAULT_WHATSAPP_REFRESH_THRESHOLD_DAYS
+    );
+  }, [whatsappStatus?.token_warning_days]);
+
+  const whatsappNeedsRefresh = useMemo(() => {
+    const days = whatsappExpiry.daysUntil;
+    if (days === null) {
+      return false;
+    }
+    return days <= whatsappWarningThreshold;
+  }, [whatsappExpiry.daysUntil, whatsappWarningThreshold]);
+
   const connectionList = useMemo(
     () =>
       CONTACT_PLATFORM_OPTIONS.map((platform) => ({
@@ -384,11 +610,55 @@ export default function MessagingConnectionsScreen() {
               return username.startsWith("@") ? username : `@${username}`;
             }
           }
+          if (
+            platform.id === "whatsapp" &&
+            whatsappStatus?.account?.connected
+          ) {
+            const parts: string[] = [];
+            if (whatsappStatus.account.business_name) {
+              parts.push(whatsappStatus.account.business_name);
+            }
+            if (whatsappStatus.account.phone_number) {
+              parts.push(whatsappStatus.account.phone_number);
+            }
+            const expiry = formatExpiry(
+              whatsappStatus.account.access_token_expires_at ?? undefined,
+            );
+            if (expiry) {
+              parts.push(expiry);
+            }
+            return parts.join(" · ") || undefined;
+          }
           return undefined;
         })(),
       })),
-    [connections, gmailStatus, outlookStatus, slackStatus, telegramStatus],
+    [
+      connections,
+      gmailStatus,
+      outlookStatus,
+      slackStatus,
+      telegramStatus,
+      whatsappStatus,
+    ],
   );
+
+  const handleWhatsappRefresh = useCallback(async () => {
+    if (busy.whatsapp) {
+      return;
+    }
+    setBusy((prev) => ({ ...prev, whatsapp: true }));
+    try {
+      await startWhatsappOnboarding();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to refresh WhatsApp connection.",
+      );
+    } finally {
+      setBusy((prev) => ({ ...prev, whatsapp: false }));
+    }
+  }, [busy.whatsapp, startWhatsappOnboarding]);
 
   const toggleConnection = async (id: ContactPlatformId) => {
     if (!session?.accessToken || busy[id]) {
@@ -607,6 +877,37 @@ export default function MessagingConnectionsScreen() {
       return;
     }
 
+    if (id === "whatsapp") {
+      try {
+        if (connections.whatsapp) {
+          await disconnectWhatsApp(session.accessToken);
+          await updateUserProfile({ channels: { whatsapp: false } });
+          setConnections((prev) => ({ ...prev, whatsapp: false }));
+          setWhatsappStatus((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  account: prev.account
+                    ? { ...prev.account, connected: false }
+                    : prev.account,
+                }
+              : prev,
+          );
+        } else {
+          await startWhatsappOnboarding();
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to update WhatsApp connection.",
+        );
+      } finally {
+        setBusy((prev) => ({ ...prev, [id]: false }));
+      }
+      return;
+    }
+
     const currentlyConnected = connections[id];
     if (currentlyConnected) {
       setConfirmDisconnect({
@@ -646,6 +947,7 @@ export default function MessagingConnectionsScreen() {
         loadOutlookStatus(),
         loadSlackStatus(),
         loadTelegramStatus(),
+        loadWhatsappStatus(),
       ]);
     } catch (error) {
       console.warn("Failed to refresh messaging connections", error);
@@ -657,6 +959,7 @@ export default function MessagingConnectionsScreen() {
     loadOutlookStatus,
     loadSlackStatus,
     loadTelegramStatus,
+    loadWhatsappStatus,
     session?.accessToken,
   ]);
 
@@ -739,8 +1042,8 @@ export default function MessagingConnectionsScreen() {
                       platform.connected ? styles.statusOn : styles.statusOff,
                     ]}
                   >
-                    {platform.connected ? "Connected" : "Not connected"}
-                  </Text>
+      {platform.connected ? "Connected" : "Not connected"}
+    </Text>
                   <Pressable
                     onPress={() => toggleConnection(platform.id)}
                     disabled={busy[platform.id]}
@@ -862,11 +1165,103 @@ export default function MessagingConnectionsScreen() {
                     </View>
                   </View>
                 ) : null}
+                {platform.id === "whatsapp" &&
+                platform.connected &&
+                whatsappNeedsRefresh ? (
+                  <View style={styles.whatsappWarningBox}>
+                    <Text style={styles.whatsappWarningText}>
+                      {whatsappExpiry.expired
+                        ? "WhatsApp connection expired. Refresh to keep sending reminders."
+                        : `WhatsApp connection expires in ${Math.max(
+                            whatsappExpiry.daysUntil ?? 0,
+                            0,
+                          )} day${
+                            Math.max(whatsappExpiry.daysUntil ?? 0, 0) === 1
+                              ? ""
+                              : "s"
+                          }. Refresh now to avoid interruptions.`}
+                    </Text>
+                    <Pressable
+                      style={[
+                        styles.whatsappRefreshButton,
+                        busy.whatsapp && styles.actionButtonDisabled,
+                      ]}
+                      onPress={handleWhatsappRefresh}
+                      disabled={busy.whatsapp}
+                    >
+                      {busy.whatsapp ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.whatsappRefreshText}>Refresh</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             );
           })}
         </View>
       </ScrollView>
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showWhatsappPinModal}
+        onRequestClose={closeWhatsappModal}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.whatsappModalOverlay}
+        >
+          <View style={styles.whatsappModalCard}>
+            <Text style={styles.whatsappModalTitle}>Enter WhatsApp PIN</Text>
+            <Text style={styles.whatsappModalHint}>
+              Use the 6-digit PIN you set while registering{" "}
+              {whatsappPending?.phoneNumber ?? "your number"}.
+            </Text>
+            <TextInput
+              value={whatsappPin}
+              onChangeText={(value) => {
+                const sanitized = value.replace(/[^0-9]/g, "").slice(0, 6);
+                setWhatsappPin(sanitized);
+                if (sanitized.length === 6) {
+                  setWhatsappPinError(null);
+                }
+              }}
+              keyboardType="number-pad"
+              maxLength={6}
+              placeholder="123456"
+              style={styles.whatsappModalInput}
+            />
+            {whatsappPinError ? (
+              <Text style={styles.whatsappModalError}>{whatsappPinError}</Text>
+            ) : null}
+            <View style={styles.whatsappModalActions}>
+              <Pressable
+                style={[styles.whatsappModalButton, styles.whatsappModalCancel]}
+                onPress={closeWhatsappModal}
+                disabled={whatsappPinSubmitting}
+              >
+                <Text style={styles.whatsappModalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.whatsappModalButton,
+                  styles.whatsappModalConfirm,
+                  whatsappPinSubmitting && styles.whatsappModalButtonDisabled,
+                ]}
+                onPress={submitWhatsappPin}
+                disabled={whatsappPinSubmitting}
+              >
+                {whatsappPinSubmitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.whatsappModalConfirmText}>Finish</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
       {confirmDisconnect ? (
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmCard}>
@@ -1064,6 +1459,32 @@ const styles = StyleSheet.create({
   rowLast: {
     borderBottomWidth: 0,
   },
+  whatsappWarningBox: {
+    marginTop: 12,
+    backgroundColor: "#FFF4E5",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#FFD9A0",
+  },
+  whatsappWarningText: {
+    color: "#7A3E00",
+    fontSize: 14,
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  whatsappRefreshButton: {
+    alignSelf: "flex-start",
+    backgroundColor: Theme.palette.primary,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  whatsappRefreshText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 14,
+  },
   platformInfo: {
     flexDirection: "row",
     alignItems: "center",
@@ -1239,5 +1660,74 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: Theme.palette.slate,
+  },
+  whatsappModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: Theme.spacing.lg,
+  },
+  whatsappModalCard: {
+    width: "100%",
+    borderRadius: Theme.radii.lg,
+    backgroundColor: "#FFFFFF",
+    padding: Theme.spacing.lg,
+    gap: Theme.spacing.md,
+  },
+  whatsappModalTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  whatsappModalHint: {
+    fontSize: 14,
+    color: Theme.palette.slate,
+  },
+  whatsappModalInput: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.sm,
+    fontSize: 20,
+    fontWeight: "600",
+    letterSpacing: 6,
+    textAlign: "center",
+  },
+  whatsappModalError: {
+    fontSize: 13,
+    color: "#B42318",
+  },
+  whatsappModalActions: {
+    flexDirection: "row",
+    gap: Theme.spacing.sm,
+  },
+  whatsappModalButton: {
+    flex: 1,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  whatsappModalCancel: {
+    borderColor: Theme.palette.border,
+    backgroundColor: "#FFFFFF",
+  },
+  whatsappModalCancelText: {
+    color: Theme.palette.ink,
+    fontWeight: "600",
+  },
+  whatsappModalConfirm: {
+    borderColor: "#1877F2",
+    backgroundColor: "#1877F2",
+  },
+  whatsappModalConfirmText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  whatsappModalButtonDisabled: {
+    opacity: 0.5,
   },
 });

@@ -39,6 +39,10 @@ export default function TimezoneOnboardingScreen() {
     router.replace("/onboarding/subscription");
   }, [router]);
 
+  const goToCurrencyStep = useCallback(() => {
+    router.replace("/onboarding/currency");
+  }, [router]);
+
   const sortTimezones = useCallback((zones: TimezoneInfo[]) => {
     return zones
       .slice()
@@ -161,17 +165,21 @@ export default function TimezoneOnboardingScreen() {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <View style={styles.headerWrapper}>
-            <View style={styles.progressRow}>
-              <View>
-                <Text style={styles.progressLabel}>Step 2 of 3</Text>
-                <Text style={styles.progressTitle}>Choose your timezone</Text>
-              </View>
+            <View style={styles.headerActions}>
+              <Pressable style={styles.backButton} onPress={goToCurrencyStep}>
+                <Feather name="chevron-left" size={16} color={palette.slate} />
+                <Text style={styles.backButtonText}>Back</Text>
+              </Pressable>
               <Pressable
                 style={styles.skipButton}
                 onPress={goToSubscriptionStep}
               >
                 <Text style={styles.skipButtonText}>Skip</Text>
               </Pressable>
+            </View>
+            <View>
+              <Text style={styles.progressLabel}>Step 2 of 3</Text>
+              <Text style={styles.progressTitle}>Choose your timezone</Text>
             </View>
             <Text style={styles.subtitle}>
               We’ll use this timezone when scheduling reminders. Changing it
@@ -228,7 +236,7 @@ const styles = StyleSheet.create({
     gap: Theme.spacing.md,
     marginBottom: Theme.spacing.md,
   },
-  progressRow: {
+  headerActions: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -251,6 +259,18 @@ const styles = StyleSheet.create({
     paddingVertical: Theme.spacing.xs,
   },
   skipButtonText: {
+    fontSize: 14,
+    color: palette.slate,
+    fontWeight: "600",
+  },
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: Theme.spacing.xs / 2,
+  },
+  backButtonText: {
     fontSize: 14,
     color: palette.slate,
     fontWeight: "600",

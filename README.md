@@ -36,6 +36,16 @@ npx expo start
 
 When you create standalone builds, update both this variable and the backend `MOBILE_APP_DEEPLINK_URI` to match the final scheme or universal link you’ve registered in Google Cloud Console so the handoff works end-to-end.
 
+### WhatsApp Embedded Signup
+
+WhatsApp onboarding now launches the hosted bridge at `https://app.duesoon.net/whatsapp/connect`, which returns the Meta authorization `code`, WABA ID, phone number ID, and the raw session payload back to the Expo app via the same deep link that `AuthSession.makeRedirectUri` generates (scheme: `ambeduesoon://`). To keep the flow healthy:
+
+- Set the backend `WHATSAPP_EMBEDDED_SIGNUP_URL` to the deployed bridge URL, and make sure it’s whitelisted in Meta’s **Valid OAuth Redirect URIs** and **Allowed Domains for the JavaScript SDK** lists.
+- Populate `VITE_WHATSAPP_APP_ID`, `VITE_WHATSAPP_CONFIG_ID`, and `VITE_WHATSAPP_FALLBACK_REDIRECT` in the web app so the bridge loads the correct Facebook Login configuration.
+- Double-check that the custom scheme declared in `app.json` (`"scheme": "ambeduesoon"`) is also registered with the mobile OS so the redirect returns to the Expo app.
+
+After the flow returns, the app prompts the user for the 6-digit PIN they set inside Embedded Signup and posts everything to `/api/messaging/whatsapp/onboarding-complete`, which means no more manual copy/paste of tokens.
+
 ## Get a fresh project
 
 When you're ready, run:

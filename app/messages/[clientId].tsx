@@ -17,7 +17,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getContactPlatformInfo } from "@/constants/contact-platforms";
 import { Theme } from "@/constants/theme";
-import { getCachedValue, setCachedValue } from "@/lib/cache";
+import {
+  clearCachedValue,
+  getCachedValue,
+  setCachedValue,
+} from "@/lib/cache";
 import { subscribeToMessageEvents } from "@/lib/message-stream";
 import { openSubscriptionUpsell } from "@/lib/subscription-upsell";
 import { useAuth } from "@/providers/auth-provider";
@@ -30,6 +34,10 @@ import type { ClientMessage } from "@/types/messages";
 
 const CLIENT_MESSAGES_CACHE_KEY = (clientId: string) =>
   `cache.messages.client.${clientId}`;
+const COMPOSER_CACHE_KEY = (
+  clientId: string,
+  contactMethodId?: string | null
+) => `cache.messages.composer.${clientId}.${contactMethodId ?? "default"}`;
 const MESSAGES_LIMIT = 30;
 
 type ChatMessage = {
@@ -90,6 +98,43 @@ export default function ClientConversationScreen() {
       cancelled = true;
     };
   }, [clientId]);
+
+  const composerCacheKey = useMemo(() => {
+    if (!clientId) return null;
+    return COMPOSER_CACHE_KEY(clientId, contactMethodId);
+  }, [clientId, contactMethodId]);
+
+  useEffect(() => {
+    if (!composerCacheKey) {
+      setComposerText("");
+      return;
+    }
+    let cancelled = false;
+    setComposerText("");
+    const hydrateComposer = async () => {
+      const cached = await getCachedValue<string>(composerCacheKey);
+      if (cancelled) return;
+      if (typeof cached === "string") {
+        setComposerText(cached);
+      }
+    };
+    hydrateComposer();
+    return () => {
+      cancelled = true;
+    };
+  }, [composerCacheKey]);
+
+  useEffect(() => {
+    if (!composerCacheKey) {
+      return;
+    }
+    const trimmed = composerText.trim();
+    if (!trimmed) {
+      void clearCachedValue(composerCacheKey);
+      return;
+    }
+    void setCachedValue(composerCacheKey, composerText);
+  }, [composerText, composerCacheKey]);
 
   useEffect(() => {
     const hasText = composerText.trim().length > 0;

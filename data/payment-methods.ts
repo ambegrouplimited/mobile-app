@@ -363,7 +363,7 @@ export const BASE_PAYMENT_METHODS: PaymentMethodDef[] = [
         label: "Zelle email",
         type: "zelle",
         fields: [
-          { key: "zelle_email", label: "Email", placeholder: "billing@duesoon.com", required: true },
+          { key: "zelle_email", label: "Email", placeholder: "billing@duesoon.net", required: true },
           { key: "label", label: "Label (optional)", placeholder: "Preferred contact" },
           {
             key: "instructions",

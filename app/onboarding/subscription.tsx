@@ -58,6 +58,10 @@ export default function SubscriptionOnboardingScreen() {
 
   const skipDisabled = freeLimitLoading && freeLimit === null;
 
+  const goToTimezoneStep = useCallback(() => {
+    router.replace("/onboarding/timezone");
+  }, [router]);
+
   useEffect(() => {
     if (
       user?.subscription?.is_active ||
@@ -193,6 +197,18 @@ export default function SubscriptionOnboardingScreen() {
         bounces={false}
       >
         <View style={styles.headerRow}>
+          <Pressable
+            onPress={goToTimezoneStep}
+            style={styles.backButton}
+            hitSlop={8}
+          >
+            <Feather
+              name="chevron-left"
+              size={16}
+              color={Theme.palette.inkMuted}
+            />
+            <Text style={styles.backButtonText}>Back</Text>
+          </Pressable>
           <Text style={styles.stepLabel}>Step 3 of 3</Text>
           <Pressable
             onPress={handleSkip}
@@ -294,6 +310,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+  },
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    padding: Theme.spacing.xs,
+  },
+  backButtonText: {
+    fontSize: 14,
+    color: Theme.palette.inkMuted,
+    fontWeight: "600",
   },
   stepLabel: {
     fontSize: 14,

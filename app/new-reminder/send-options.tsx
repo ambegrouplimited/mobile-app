@@ -174,7 +174,12 @@ export default function SendOptionsScreen() {
   const [telegramContactsError, setTelegramContactsError] = useState<
     string | null
   >(null);
+  const [telegramContactsRefreshToken, setTelegramContactsRefreshToken] =
+    useState(0);
   const [telegramPickerExpanded, setTelegramPickerExpanded] = useState(false);
+  const triggerTelegramContactsRefresh = useCallback(() => {
+    setTelegramContactsRefreshToken((prev) => prev + 1);
+  }, []);
   const slackWorkspaces = useMemo(
     () => slackStatusData?.workspaces ?? [],
     [slackStatusData],
@@ -662,6 +667,7 @@ export default function SendOptionsScreen() {
     session?.accessToken,
     connectionState.connected,
     telegramChatId,
+    telegramContactsRefreshToken,
   ]);
 
   useEffect(() => {
@@ -1336,6 +1342,13 @@ export default function SendOptionsScreen() {
           disabled={!connectionReady}
           onPress={async () => {
             if (!connectionReady) return;
+            if (
+              platform === "telegram" &&
+              selection === "self" &&
+              connectionState.connected
+            ) {
+              triggerTelegramContactsRefresh();
+            }
             await Haptics.selectionAsync();
             openContactModal();
           }}

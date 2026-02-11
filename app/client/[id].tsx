@@ -1538,9 +1538,9 @@ function formatContactPlatform(type: ContactMethod["type"]) {
     case "email_outlook":
       return "Email";
     case "whatsapp":
-      return "WhatsApp";
+      return "WhatsApp Business";
     case "telegram":
-      return "Telegram";
+      return "Telegram Business";
     case "slack":
       return "Slack";
     default:

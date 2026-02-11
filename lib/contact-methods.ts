@@ -31,9 +31,9 @@ export function formatMethodLabel(method: ContactMethod) {
     case "email_outlook":
       return "Outlook";
     case "whatsapp":
-      return "WhatsApp";
+      return "WhatsApp Business";
     case "telegram":
-      return "Telegram";
+      return "Telegram Business";
     case "slack":
       return "Slack";
     default:

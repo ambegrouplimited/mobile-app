@@ -9,6 +9,7 @@ import { Buffer } from "buffer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -49,6 +50,7 @@ import {
   SlackStatus,
 } from "@/services/slack";
 import {
+  deleteTelegramMtprotoSession,
   disconnectTelegram,
   fetchTelegramStatus,
   TelegramStatus,
@@ -60,6 +62,7 @@ import {
   initiateWhatsAppConnect,
   WhatsAppStatus,
 } from "@/services/whatsapp";
+import { useTelegramMtprotoFlow } from "@/hooks/useTelegramMtprotoFlow";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -75,6 +78,7 @@ const OUTLOOK_STATUS_CACHE_KEY = "cache.messaging.outlookStatus";
 const SLACK_STATUS_CACHE_KEY = "cache.messaging.slackStatus";
 const TELEGRAM_STATUS_CACHE_KEY = "cache.messaging.telegramStatus";
 const DEFAULT_WHATSAPP_REFRESH_THRESHOLD_DAYS = 7;
+const COMING_SOON_PLATFORMS: ContactPlatformId[] = ["gmail", "slack"];
 
 function getAppRedirectUri() {
   return AuthSession.makeRedirectUri({
@@ -125,6 +129,22 @@ function decodeMetaPayload(
   }
 }
 
+function formatTelegramUsername(username?: string | null) {
+  if (!username) return "";
+  return username.startsWith("@") ? username : `@${username}`;
+}
+
+function formatDateWithTime(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return null;
+  }
+}
+
 type WhatsAppPending = {
   state: string;
   code: string;
@@ -166,6 +186,7 @@ export default function MessagingConnectionsScreen() {
     null,
   );
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
+  const [telegramMtprotoBusy, setTelegramMtprotoBusy] = useState(false);
   const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus | null>(
     null,
   );
@@ -251,7 +272,7 @@ export default function MessagingConnectionsScreen() {
         await updateUserProfile({ channels: { telegram: connected } });
       } catch (err) {
         telegramChannelStateRef.current = previous;
-        console.warn("Failed to sync Telegram channel state", err);
+        console.warn("Failed to sync Telegram Business channel state", err);
       }
     },
     [updateUserProfile],
@@ -290,7 +311,7 @@ export default function MessagingConnectionsScreen() {
       );
       return status;
     } catch (err) {
-      console.warn("Failed to load WhatsApp status", err);
+      console.warn("Failed to load WhatsApp Business status", err);
       return null;
     }
   }, [session?.accessToken]);
@@ -365,7 +386,7 @@ export default function MessagingConnectionsScreen() {
       void syncTelegramChannelState(isConnected);
       return status;
     } catch (err) {
-      console.warn("Failed to load Telegram status", err);
+      console.warn("Failed to load Telegram Business status", err);
       return null;
     }
   }, [session?.accessToken, syncTelegramChannelState]);
@@ -374,9 +395,48 @@ export default function MessagingConnectionsScreen() {
     loadTelegramStatus();
   }, [loadTelegramStatus]);
 
+  const { openFlow: openTelegramMtprotoFlow, modal: telegramMtprotoModal } =
+    useTelegramMtprotoFlow({
+      token: session?.accessToken ?? null,
+      onCompleted: () => {
+        void loadTelegramStatus();
+      },
+    });
+
+  const handleMtprotoReset = useCallback(async () => {
+    if (!session?.accessToken) {
+      return;
+    }
+    setTelegramMtprotoBusy(true);
+    try {
+      await deleteTelegramMtprotoSession(session.accessToken);
+      await loadTelegramStatus();
+    } catch (err) {
+      console.warn("Failed to remove Telegram MTProto session", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to remove Telegram session. Try again.",
+      );
+    } finally {
+      setTelegramMtprotoBusy(false);
+    }
+  }, [loadTelegramStatus, session?.accessToken]);
+
+  const confirmMtprotoReset = useCallback(() => {
+    Alert.alert(
+      "Remove Telegram session?",
+      "DueSoon will stop keeping Telegram chats active until you reconnect.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: () => void handleMtprotoReset() },
+      ],
+    );
+  }, [handleMtprotoReset]);
+
   const startWhatsappOnboarding = useCallback(async () => {
     if (!session?.accessToken) {
-      throw new Error("You need to be signed in to connect WhatsApp.");
+      throw new Error("You need to be signed in to connect WhatsApp Business.");
     }
     const serverRedirectUri = getServerRedirectUri();
     const appRedirectUri = getAppRedirectUri();
@@ -388,7 +448,7 @@ export default function MessagingConnectionsScreen() {
       account?.onboarding_url ?? whatsappStatus?.onboarding_url;
     if (!onboardingUrl) {
       throw new Error(
-        "Unable to start WhatsApp signup. Please try again in a moment.",
+        "Unable to start WhatsApp Business signup. Please try again in a moment.",
       );
     }
     const result = await WebBrowser.openAuthSessionAsync(
@@ -396,12 +456,12 @@ export default function MessagingConnectionsScreen() {
       appRedirectUri,
     );
     if (result.type !== "success" || !result.url) {
-      throw new Error("WhatsApp connection was canceled.");
+      throw new Error("WhatsApp Business connection was canceled.");
     }
     const params = parseQueryParams(result.url);
     const event = (params.event ?? "").toUpperCase();
     if (event === "CANCEL") {
-      throw new Error("WhatsApp signup was canceled.");
+      throw new Error("WhatsApp Business signup was canceled.");
     }
     const code = params.code;
     const state =
@@ -429,7 +489,7 @@ export default function MessagingConnectionsScreen() {
       displayName ??
       null;
     if (!code || !state) {
-      throw new Error("WhatsApp did not return the authorization code.");
+      throw new Error("WhatsApp Business did not return the authorization code.");
     }
     setWhatsappPending({
       code,
@@ -483,7 +543,7 @@ export default function MessagingConnectionsScreen() {
       setWhatsappPinError(
         err instanceof Error
           ? err.message
-          : "Unable to finish WhatsApp onboarding. Please try again.",
+          : "Unable to finish WhatsApp Business onboarding. Please try again.",
       );
     } finally {
       setWhatsappPinSubmitting(false);
@@ -502,7 +562,7 @@ export default function MessagingConnectionsScreen() {
     const onboardingUrl =
       latestStatus?.connection?.onboarding_url ?? latestStatus?.onboarding_url;
     if (!onboardingUrl) {
-      throw new Error("Unable to open Telegram. Please try again.");
+      throw new Error("Unable to open Telegram Business. Please try again.");
     }
     await Linking.openURL(onboardingUrl);
     setTelegramFlowActive(true);
@@ -570,11 +630,14 @@ export default function MessagingConnectionsScreen() {
 
   const connectionList = useMemo(
     () =>
-      CONTACT_PLATFORM_OPTIONS.map((platform) => ({
-        ...platform,
-        info: CONTACT_PLATFORM_INFO[platform.id],
-        connected: connections[platform.id],
-        meta: (() => {
+      CONTACT_PLATFORM_OPTIONS.map((platform) => {
+        const comingSoon = COMING_SOON_PLATFORMS.includes(platform.id);
+        return {
+          ...platform,
+          comingSoon,
+          info: CONTACT_PLATFORM_INFO[platform.id],
+          connected: connections[platform.id],
+          meta: (() => {
           if (platform.id === "gmail" && gmailStatus?.connected) {
             return formatExpiry(gmailStatus.expires_at);
           }
@@ -600,14 +663,20 @@ export default function MessagingConnectionsScreen() {
             }
             return parts.join(" · ") || undefined;
           }
-          if (
-            platform.id === "telegram" &&
-            telegramStatus?.connection?.connected
-          ) {
-            const username = telegramStatus.connection.telegram_username;
+          if (platform.id === "telegram" && telegramStatus) {
+            const parts: string[] = [];
+            const username = telegramStatus.connection?.telegram_username;
             if (username) {
-              return username.startsWith("@") ? username : `@${username}`;
+              parts.push(formatTelegramUsername(username));
             }
+            if (telegramStatus.mtproto_supported) {
+              if (telegramStatus.mtproto?.connected) {
+                parts.push("Account session ready");
+              } else if (telegramStatus.mtproto?.last_error) {
+                parts.push("Session needs attention");
+              }
+            }
+            return parts.join(" · ") || undefined;
           }
           if (
             platform.id === "whatsapp" &&
@@ -630,7 +699,8 @@ export default function MessagingConnectionsScreen() {
           }
           return undefined;
         })(),
-      })),
+        };
+      }),
     [
       connections,
       gmailStatus,
@@ -652,7 +722,7 @@ export default function MessagingConnectionsScreen() {
       setError(
         err instanceof Error
           ? err.message
-          : "Unable to refresh WhatsApp connection.",
+          : "Unable to refresh WhatsApp Business connection.",
       );
     } finally {
       setBusy((prev) => ({ ...prev, whatsapp: false }));
@@ -661,6 +731,12 @@ export default function MessagingConnectionsScreen() {
 
   const toggleConnection = async (id: ContactPlatformId) => {
     if (!session?.accessToken || busy[id]) {
+      return;
+    }
+    if (COMING_SOON_PLATFORMS.includes(id) && !connections[id]) {
+      setError(
+        `${CONTACT_PLATFORM_INFO[id]?.label ?? "This connection"} is coming soon.`,
+      );
       return;
     }
     if (connections[id]) {
@@ -868,7 +944,7 @@ export default function MessagingConnectionsScreen() {
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to update Telegram connection.",
+            : "Unable to update Telegram Business connection.",
         );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
@@ -899,7 +975,7 @@ export default function MessagingConnectionsScreen() {
         setError(
           err instanceof Error
             ? err.message
-            : "Unable to update WhatsApp connection.",
+            : "Unable to update WhatsApp Business connection.",
         );
       } finally {
         setBusy((prev) => ({ ...prev, [id]: false }));
@@ -1001,6 +1077,17 @@ export default function MessagingConnectionsScreen() {
               telegramStatus?.connection?.onboarding_url ??
               telegramStatus?.onboarding_url;
             const canOpenTelegram = Boolean(onboardingUrl);
+            const mtprotoSupported =
+              telegramStatus?.mtproto_supported ?? false;
+            const mtprotoStatus = mtprotoSupported
+              ? telegramStatus?.mtproto ?? null
+              : null;
+            const mtprotoConnected = Boolean(mtprotoStatus?.connected);
+            const lastKeepaliveLabel = formatDateWithTime(
+              mtprotoStatus?.last_keepalive_at ?? null,
+            );
+            const comingSoonLocked = platform.comingSoon && !platform.connected;
+            const actionDisabled = busy[platform.id] || comingSoonLocked;
             return (
               <View
                 key={platform.id}
@@ -1027,7 +1114,14 @@ export default function MessagingConnectionsScreen() {
                     )}
                   </View>
                   <View style={styles.textGroup}>
-                    <Text style={styles.platformLabel}>{platform.label}</Text>
+                    <View style={styles.platformLabelRow}>
+                      <Text style={styles.platformLabel}>{platform.label}</Text>
+                      {platform.comingSoon ? (
+                        <View style={styles.comingSoonTag}>
+                          <Text style={styles.comingSoonTagText}>Coming soon</Text>
+                        </View>
+                      ) : null}
+                    </View>
                     <Text style={styles.platformDetail}>{platform.detail}</Text>
                     {platform.meta ? (
                       <Text style={styles.platformMeta}>{platform.meta}</Text>
@@ -1038,31 +1132,45 @@ export default function MessagingConnectionsScreen() {
                   <Text
                     style={[
                       styles.statusText,
-                      platform.connected ? styles.statusOn : styles.statusOff,
+                      comingSoonLocked
+                        ? styles.statusComingSoon
+                        : platform.connected
+                        ? styles.statusOn
+                        : styles.statusOff,
                     ]}
                   >
-      {platform.connected ? "Connected" : "Not connected"}
-    </Text>
+                    {comingSoonLocked
+                      ? "Coming soon"
+                      : platform.connected
+                      ? "Connected"
+                      : "Not connected"}
+                  </Text>
                   <Pressable
                     onPress={() => toggleConnection(platform.id)}
-                    disabled={busy[platform.id]}
+                    disabled={actionDisabled}
                     style={[
                       styles.actionButton,
-                      platform.connected
+                      comingSoonLocked
+                        ? styles.actionButtonDisabled
+                        : platform.connected
                         ? styles.disconnectButton
                         : styles.connectButton,
-                      busy[platform.id] && styles.actionButtonDisabled,
+                      actionDisabled && styles.actionButtonDisabled,
                     ]}
                   >
                     <Text
                       style={[
                         styles.actionButtonText,
-                        platform.connected
+                        comingSoonLocked
+                          ? styles.connectText
+                          : platform.connected
                           ? styles.disconnectText
                           : styles.connectText,
                       ]}
                     >
-                      {platform.connected
+                      {comingSoonLocked
+                        ? "Coming soon"
+                        : platform.connected
                         ? platform.id === "slack"
                           ? "Manage"
                           : "Disconnect"
@@ -1093,8 +1201,8 @@ export default function MessagingConnectionsScreen() {
                           Start the bot
                         </Text>
                         <Text style={styles.telegramStepDescription}>
-                          Tap Connect to open Telegram and press Start inside
-                          DueSoon Bot.
+                          Tap Connect to open Telegram Business and press Start
+                          inside DueSoon Bot.
                         </Text>
                         {!telegramStarted ? (
                           <Pressable
@@ -1107,7 +1215,7 @@ export default function MessagingConnectionsScreen() {
                             ]}
                           >
                             <Text style={styles.telegramLinkText}>
-                              Open Telegram
+                              Open Telegram Business
                             </Text>
                           </Pressable>
                         ) : null}
@@ -1154,7 +1262,7 @@ export default function MessagingConnectionsScreen() {
                             <View style={styles.telegramInstructionItem}>
                               <View style={styles.telegramInstructionBullet} />
                               <Text style={styles.telegramInstructionText}>
-                                Make sure to exit the Chatbots page on Telegram
+                                Make sure to exit the Chatbots page on Telegram Business
                                 for Bot To Activate.
                               </Text>
                             </View>
@@ -1164,14 +1272,79 @@ export default function MessagingConnectionsScreen() {
                     </View>
                   </View>
                 ) : null}
+                {isTelegram && mtprotoSupported ? (
+                  <View style={styles.telegramMtprotoCard}>
+                    <Text style={styles.mtprotoTitle}>
+                      Telegram account session
+                    </Text>
+                    <Text style={styles.mtprotoStatus}>
+                      {mtprotoConnected
+                        ? `Active${
+                            mtprotoStatus?.telegram_username
+                              ? ` · ${formatTelegramUsername(
+                                  mtprotoStatus.telegram_username,
+                                )}`
+                              : ""
+                          }`
+                        : "Not connected"}
+                    </Text>
+                    {lastKeepaliveLabel ? (
+                      <Text style={styles.mtprotoMeta}>
+                        Last keepalive: {lastKeepaliveLabel}
+                      </Text>
+                    ) : null}
+                    {mtprotoStatus?.last_error ? (
+                      <Text style={styles.mtprotoError}>
+                        Needs attention: {mtprotoStatus.last_error}
+                      </Text>
+                    ) : null}
+                    <View style={styles.mtprotoActions}>
+                      <Pressable
+                        style={styles.mtprotoPrimaryButton}
+                        onPress={() =>
+                          openTelegramMtprotoFlow(
+                            mtprotoStatus?.phone_number ?? undefined,
+                          )
+                        }
+                      >
+                        <Text style={styles.mtprotoPrimaryText}>
+                          {mtprotoConnected
+                            ? "Reconnect Telegram account"
+                            : "Connect Telegram account"}
+                        </Text>
+                      </Pressable>
+                      {mtprotoConnected ? (
+                        <Pressable
+                          style={[
+                            styles.mtprotoSecondaryButton,
+                            telegramMtprotoBusy && styles.actionButtonDisabled,
+                          ]}
+                          onPress={confirmMtprotoReset}
+                          disabled={telegramMtprotoBusy}
+                        >
+                          {telegramMtprotoBusy ? (
+                            <ActivityIndicator
+                              color={Theme.palette.ink}
+                              size="small"
+                            />
+                          ) : (
+                            <Text style={styles.mtprotoSecondaryText}>
+                              Remove session
+                            </Text>
+                          )}
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : null}
                 {platform.id === "whatsapp" &&
                 platform.connected &&
                 whatsappNeedsRefresh ? (
                   <View style={styles.whatsappWarningBox}>
                     <Text style={styles.whatsappWarningText}>
                       {whatsappExpiry.expired
-                        ? "WhatsApp connection expired. Refresh to keep sending reminders."
-                        : `WhatsApp connection expires in ${Math.max(
+                        ? "WhatsApp Business connection expired. Refresh to keep sending reminders."
+                        : `WhatsApp Business connection expires in ${Math.max(
                             whatsappExpiry.daysUntil ?? 0,
                             0,
                           )} day${
@@ -1212,7 +1385,7 @@ export default function MessagingConnectionsScreen() {
           style={styles.whatsappModalOverlay}
         >
           <View style={styles.whatsappModalCard}>
-            <Text style={styles.whatsappModalTitle}>Enter WhatsApp PIN</Text>
+            <Text style={styles.whatsappModalTitle}>Enter WhatsApp Business PIN</Text>
             <Text style={styles.whatsappModalHint}>
               Use the 6-digit PIN you set while registering{" "}
               {whatsappPending?.phoneNumber ?? "your number"}.
@@ -1318,12 +1491,18 @@ export default function MessagingConnectionsScreen() {
                         has_business_connection: false,
                         connection: null,
                         chats: [],
+                        mtproto_supported:
+                          telegramStatus?.mtproto_supported ?? false,
+                        mtproto: null,
                       });
                       await setCachedValue(TELEGRAM_STATUS_CACHE_KEY, {
                         has_started_bot: false,
                         has_business_connection: false,
                         connection: null,
                         chats: [],
+                        mtproto_supported:
+                          telegramStatus?.mtproto_supported ?? false,
+                        mtproto: null,
                       });
                     } else {
                       await disconnectChannel(id, session.accessToken);
@@ -1347,6 +1526,7 @@ export default function MessagingConnectionsScreen() {
           </View>
         </View>
       ) : null}
+      {telegramMtprotoModal}
     </SafeAreaView>
   );
 }
@@ -1507,10 +1687,26 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  platformLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+  },
   platformLabel: {
     fontSize: 16,
     fontWeight: "600",
     color: Theme.palette.ink,
+  },
+  comingSoonTag: {
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: 2,
+    borderRadius: Theme.radii.sm,
+    backgroundColor: Theme.palette.border,
+  },
+  comingSoonTagText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: Theme.palette.slate,
   },
   platformDetail: {
     fontSize: 13,
@@ -1545,6 +1741,10 @@ const styles = StyleSheet.create({
   },
   statusOff: {
     color: Theme.palette.slate,
+  },
+  statusComingSoon: {
+    color: Theme.palette.slate,
+    fontStyle: "italic",
   },
   actionButton: {
     borderRadius: Theme.radii.md,
@@ -1659,6 +1859,61 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: Theme.palette.slate,
+  },
+  telegramMtprotoCard: {
+    marginTop: Theme.spacing.md,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    padding: Theme.spacing.md,
+    backgroundColor: Theme.palette.surface,
+    gap: Theme.spacing.xs,
+  },
+  mtprotoTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Theme.palette.ink,
+  },
+  mtprotoStatus: {
+    fontSize: 13,
+    color: Theme.palette.ink,
+  },
+  mtprotoMeta: {
+    fontSize: 12,
+    color: Theme.palette.slate,
+  },
+  mtprotoError: {
+    fontSize: 12,
+    color: Theme.palette.accent,
+  },
+  mtprotoActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: Theme.spacing.sm,
+    marginTop: Theme.spacing.xs,
+  },
+  mtprotoPrimaryButton: {
+    backgroundColor: Theme.palette.ink,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.lg,
+  },
+  mtprotoPrimaryText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  mtprotoSecondaryButton: {
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    paddingVertical: Theme.spacing.sm,
+    paddingHorizontal: Theme.spacing.lg,
+  },
+  mtprotoSecondaryText: {
+    color: Theme.palette.ink,
+    fontWeight: "500",
+    fontSize: 13,
   },
   whatsappModalOverlay: {
     flex: 1,

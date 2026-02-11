@@ -170,7 +170,7 @@ export default function MessagesScreen() {
             <View style={styles.lockedBannerText}>
               <Text style={styles.lockedBannerTitle}>Messaging is locked</Text>
               <Text style={styles.lockedBannerSubtitle}>
-                DueSoon Pro unlocks messaging across Gmail, Slack, WhatsApp,
+                DueSoon Pro unlocks messaging across Gmail, Slack, WhatsApp Business,
                 and more.
               </Text>
             </View>

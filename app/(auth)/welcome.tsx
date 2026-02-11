@@ -30,7 +30,7 @@ const SLIDES: WelcomeSlide[] = [
     key: "pipeline",
     title: "Send reminders anywhere",
     caption:
-      "Send reminders via Gmail, Outlook, WhatsApp, Telegram, and Slack from one app.",
+      "Send reminders via Gmail, Outlook, WhatsApp Business, Telegram Business, and Slack from one app.",
     image: require("@/assets/welcomeScreens/step1.png"),
   },
   {

@@ -53,7 +53,7 @@ const settingsItems = [
   {
     icon: "message-square",
     label: "Messaging connections",
-    detail: "Gmail, WhatsApp, Slack",
+    detail: "Gmail, WhatsApp Business, Slack",
     route: "/settings/messaging-connections",
   },
   {

@@ -115,7 +115,7 @@ export function SubscriptionUpsellModal() {
       : "Unlock DueSoon Pro";
   const bodyText = state.message
     ? state.message
-    : `Join the ${planName} to send unlimited reminders, access messaging across Gmail, Slack, WhatsApp, and keep your automations running without limits.`;
+    : `Join the ${planName} to send unlimited reminders, access messaging across Gmail, Slack, WhatsApp Business, and keep your automations running without limits.`;
 
   return (
     <Modal

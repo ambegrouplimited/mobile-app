@@ -342,9 +342,9 @@ function formatChannelLabel(channel: string) {
     case "mailgun":
       return "Mailgun";
     case "whatsapp":
-      return "WhatsApp";
+      return "WhatsApp Business";
     case "telegram":
-      return "Telegram";
+      return "Telegram Business";
     case "slack":
       return "Slack";
     default:

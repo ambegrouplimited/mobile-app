@@ -14,11 +14,11 @@ const PLATFORM_DEFINITIONS = {
     assetUri: Asset.fromModule(require("@/assets/contactPlatforms/slack.svg")).uri,
   },
   whatsapp: {
-    label: "WhatsApp",
+    label: "WhatsApp Business",
     assetUri: Asset.fromModule(require("@/assets/contactPlatforms/whatsapp.svg")).uri,
   },
   telegram: {
-    label: "Telegram",
+    label: "Telegram Business",
     assetUri: Asset.fromModule(require("@/assets/contactPlatforms/telegram.svg")).uri,
   },
   discord: {
@@ -67,12 +67,12 @@ export const CONTACT_PLATFORM_OPTIONS: Array<{
   },
   {
     id: "whatsapp",
-    label: "WhatsApp",
-    detail: "Use your business number for encrypted chats.",
+    label: "WhatsApp Business",
+    detail: "Use your WhatsApp Business number for encrypted chats.",
   },
   {
     id: "telegram",
-    label: "Telegram",
-    detail: "Keep reminders in their Telegram inbox.",
+    label: "Telegram Business",
+    detail: "Keep reminders in their Telegram Business inbox.",
   },
 ];

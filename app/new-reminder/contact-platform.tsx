@@ -95,6 +95,7 @@ export default function ContactPlatformScreen() {
         <View style={styles.platformGrid}>
           {CONTACT_PLATFORM_OPTIONS.map((platform) => {
             const active = platform.id === selected;
+            const comingSoon = platform.id === "slack";
             return (
               <Pressable
                 key={platform.id}
@@ -110,7 +111,14 @@ export default function ContactPlatformScreen() {
                     />
                   </View>
                   <View style={styles.platformText}>
-                    <Text style={styles.platformLabel}>{platform.label}</Text>
+                    <View style={styles.platformLabelRow}>
+                      <Text style={styles.platformLabel}>{platform.label}</Text>
+                      {comingSoon ? (
+                        <View style={styles.platformBadge}>
+                          <Text style={styles.platformBadgeText}>Coming soon</Text>
+                        </View>
+                      ) : null}
+                    </View>
                     <Text style={styles.platformDetail}>{platform.detail}</Text>
                   </View>
                 </View>
@@ -126,8 +134,15 @@ export default function ContactPlatformScreen() {
         </View>
 
         <Pressable
-          style={styles.primaryButton}
+          style={[
+            styles.primaryButton,
+            selected === "slack" && styles.primaryButtonDisabled,
+          ]}
+          disabled={selected === "slack"}
           onPress={async () => {
+            if (selected === "slack") {
+              return;
+            }
             await Haptics.selectionAsync();
             const savedDraftId = await ensureDraftSaved();
             const nextParams = {
@@ -141,8 +156,17 @@ export default function ContactPlatformScreen() {
             });
           }}
         >
-          <Text style={styles.primaryButtonText}>Continue with {formatLabel(selected)}</Text>
+          <Text style={styles.primaryButtonText}>
+            {selected === "slack"
+              ? "Slack coming soon"
+              : `Continue with ${formatLabel(selected)}`}
+          </Text>
         </Pressable>
+        {selected === "slack" ? (
+          <Text style={styles.comingSoonHint}>
+            Slack reminders are coming soon. Pick another channel for now.
+          </Text>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -257,10 +281,27 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  platformLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Theme.spacing.xs,
+    flexWrap: "wrap",
+  },
   platformLabel: {
     fontSize: 16,
     fontWeight: "600",
     color: Theme.palette.ink,
+  },
+  platformBadge: {
+    paddingHorizontal: Theme.spacing.xs,
+    paddingVertical: 2,
+    borderRadius: Theme.radii.sm,
+    backgroundColor: Theme.palette.border,
+  },
+  platformBadgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: Theme.palette.slate,
   },
   platformDetail: {
     fontSize: 13,
@@ -288,9 +329,17 @@ const styles = StyleSheet.create({
     borderRadius: Theme.radii.md,
     backgroundColor: Theme.palette.slate,
   },
+  primaryButtonDisabled: {
+    backgroundColor: Theme.palette.border,
+  },
   primaryButtonText: {
     fontSize: 16,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  comingSoonHint: {
+    fontSize: 13,
+    color: Theme.palette.slate,
+    textAlign: "center",
   },
 });

@@ -22,6 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Theme } from "@/constants/theme";
 import { useReminderDraftPersistor } from "@/hooks/use-reminder-draft-persistor";
+import { useTelegramMtprotoFlow } from "@/hooks/useTelegramMtprotoFlow";
 import { useAuth } from "@/providers/auth-provider";
 import { createClient } from "@/services/clients";
 import {
@@ -74,14 +75,14 @@ const platformMeta = {
     placeholder: "@client",
   },
   whatsapp: {
-    label: "WhatsApp",
-    contactLabel: "WhatsApp number",
+    label: "WhatsApp Business",
+    contactLabel: "WhatsApp Business number",
     placeholder: "+1 (415) 555-2981",
     keyboard: "phone-pad",
   },
   telegram: {
-    label: "Telegram",
-    contactLabel: "Telegram handle",
+    label: "Telegram Business",
+    contactLabel: "Telegram Business handle",
     placeholder: "@client",
   },
 } as const;
@@ -177,6 +178,8 @@ export default function SendOptionsScreen() {
   const [telegramContactsRefreshToken, setTelegramContactsRefreshToken] =
     useState(0);
   const [telegramPickerExpanded, setTelegramPickerExpanded] = useState(false);
+  const [telegramSearch, setTelegramSearch] = useState("");
+  const [slackSearch, setSlackSearch] = useState("");
   const triggerTelegramContactsRefresh = useCallback(() => {
     setTelegramContactsRefreshToken((prev) => prev + 1);
   }, []);
@@ -191,12 +194,27 @@ export default function SendOptionsScreen() {
       null
     );
   }, [slackTeamId, slackWorkspaces]);
+  const filteredSlackUsers = useMemo(() => {
+    const source = slackUsersByWorkspace[slackTeamId] ?? slackUsers;
+    if (!slackSearch.trim()) return source;
+    const term = slackSearch.trim().toLowerCase();
+    return source.filter((member) => {
+      const haystack = `${member.real_name ?? ""} ${member.display_name ?? ""} ${member.name ?? ""}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [slackSearch, slackTeamId, slackUsers, slackUsersByWorkspace]);
   const selectedSlackUser = useMemo(() => {
     if (!slackUserId) return null;
-    const workspaceUsers = slackUsersByWorkspace[slackTeamId];
-    const sourceList = workspaceUsers ?? slackUsers;
-    return sourceList.find((user) => user.id === slackUserId) ?? null;
-  }, [slackUserId, slackTeamId, slackUsers, slackUsersByWorkspace]);
+    return filteredSlackUsers.find((user) => user.id === slackUserId) ?? null;
+  }, [slackUserId, filteredSlackUsers]);
+  const filteredTelegramContacts = useMemo(() => {
+    if (!telegramSearch.trim()) return telegramContacts;
+    const term = telegramSearch.trim().toLowerCase();
+    return telegramContacts.filter((contact) => {
+      const haystack = `${contact.name ?? ""} ${contact.username ?? ""}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [telegramContacts, telegramSearch]);
   const selectedTelegramContact = useMemo(() => {
     if (!telegramChatId) return null;
     return (
@@ -219,6 +237,8 @@ export default function SendOptionsScreen() {
     }),
   );
   const [telegramFlowActive, setTelegramFlowActive] = useState(false);
+  const [telegramStatusSnapshot, setTelegramStatusSnapshot] =
+    useState<TelegramStatus | null>(null);
   const draftId = persistedParams.draftId ?? null;
   const baseParams = useMemo(() => {
     const next = { ...persistedParams };
@@ -336,6 +356,9 @@ export default function SendOptionsScreen() {
     }
     setConnectionState((prev) => ({ ...prev, loading: true, error: null }));
     try {
+      if (platform !== "telegram") {
+        setTelegramStatusSnapshot(null);
+      }
       if (platform === "gmail") {
         const status = await fetchGmailStatus(session.accessToken);
         setConnectionState((prev) => ({
@@ -393,6 +416,7 @@ export default function SendOptionsScreen() {
         const connected = Boolean(
           status.has_business_connection && status.connection?.connected,
         );
+        setTelegramStatusSnapshot(status);
         setConnectionState((prev) => ({
           ...prev,
           connected,
@@ -438,6 +462,7 @@ export default function SendOptionsScreen() {
         meta: null,
       });
       setTelegramFlowActive(false);
+      setTelegramStatusSnapshot(null);
       setSlackStatusData((prev) => (platform === "slack" ? prev : null));
       return;
     }
@@ -458,6 +483,15 @@ export default function SendOptionsScreen() {
     platform,
     session?.accessToken,
   ]);
+
+  const { openFlow: openTelegramMtprotoFlow, modal: telegramMtprotoModal } =
+    useTelegramMtprotoFlow({
+      token: session?.accessToken ?? null,
+      onCompleted: () => {
+        void loadConnectionStatus();
+        triggerTelegramContactsRefresh();
+      },
+    });
 
   const handleConnectPress = useCallback(async () => {
     if (
@@ -510,9 +544,11 @@ export default function SendOptionsScreen() {
     session?.accessToken,
   ]);
 
+  const gmailSelfComingSoon = platform === "gmail" && selection === "self";
   const connectionReady =
     !selectionRequiresConnection ||
     (connectionState.connected && !connectionState.loading);
+  const canContinue = connectionReady && !gmailSelfComingSoon;
 
   const platformLabel = platformMeta[platform].label;
 
@@ -652,7 +688,7 @@ export default function SendOptionsScreen() {
         setTelegramContactsError(
           err instanceof Error
             ? err.message
-            : "Unable to load Telegram contacts.",
+            : "Unable to load Telegram Business contacts.",
         );
       })
       .finally(() => {
@@ -871,7 +907,7 @@ export default function SendOptionsScreen() {
     if (platform === "whatsapp") {
       return (
         <>
-          <Text style={styles.fieldLabel}>WhatsApp number</Text>
+          <Text style={styles.fieldLabel}>WhatsApp Business number</Text>
           <TextInput
             style={[styles.input, contactError && styles.inputError]}
             placeholder={platformMeta.whatsapp.placeholder}
@@ -990,33 +1026,43 @@ export default function SendOptionsScreen() {
           {slackUsersError ? (
             <Text style={styles.helperTextError}>{slackUsersError}</Text>
           ) : null}
-          {slackUsersExpanded ? (
-            <View style={[styles.selectionList, styles.selectionListLarge]}>
-              {slackUsersLoading ? (
-                <View style={styles.selectionEmpty}>
-                  <ActivityIndicator color={Theme.palette.slate} />
-                </View>
-              ) : slackUsersError ? (
-                <View style={styles.selectionEmpty}>
-                  <Text style={styles.helperTextError}>{slackUsersError}</Text>
-                </View>
-              ) : slackUsers.length === 0 ? (
-                <Text style={styles.helperText}>
-                  No members found in this workspace.
-                </Text>
-              ) : (
-                <ScrollView keyboardShouldPersistTaps="handled">
-                  {slackUsers.map((member) => {
-                    const active = member.id === slackUserId;
-                    const name =
-                      member.real_name || member.display_name || member.name;
-                    const detail =
-                      member.display_name && member.display_name !== name
-                        ? member.display_name
-                        : member.name;
-                    return (
-                      <Pressable
-                        key={member.id}
+        {slackUsersExpanded ? (
+          <View style={[styles.selectionList, styles.selectionListLarge]}>
+            {slackUsersLoading ? (
+              <View style={styles.selectionEmpty}>
+                <ActivityIndicator color={Theme.palette.slate} />
+              </View>
+            ) : slackUsersError ? (
+              <View style={styles.selectionEmpty}>
+                <Text style={styles.helperTextError}>{slackUsersError}</Text>
+              </View>
+            ) : slackUsers.length === 0 ? (
+              <Text style={styles.helperText}>
+                No members found in this workspace.
+              </Text>
+            ) : (
+                <>
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search members"
+                    placeholderTextColor={Theme.palette.slate}
+                    value={slackSearch}
+                    onChangeText={setSlackSearch}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                    {filteredSlackUsers.map((member) => {
+                      const active = member.id === slackUserId;
+                      const name =
+                        member.real_name || member.display_name || member.name;
+                      const detail =
+                        member.display_name && member.display_name !== name
+                          ? member.display_name
+                          : member.name;
+                      return (
+                        <Pressable
+                          key={member.id}
                         style={[
                           styles.selectionItem,
                           active && styles.selectionItemActive,
@@ -1025,23 +1071,35 @@ export default function SendOptionsScreen() {
                           setSlackUserId(member.id);
                           setSlackUsersExpanded(false);
                           setContactError(null);
+                          setSlackSearch("");
                         }}
                       >
                         <Text style={styles.selectionItemName}>{name}</Text>
                         <Text style={styles.selectionItemDetail}>{detail}</Text>
                       </Pressable>
                     );
-                  })}
-                </ScrollView>
+                    })}
+                    {filteredSlackUsers.length === 0 ? (
+                      <View style={styles.selectionEmpty}>
+                        <Text style={styles.helperText}>No matches.</Text>
+                      </View>
+                    ) : null}
+                  </ScrollView>
+                </>
               )}
             </View>
           ) : null}
         </>
       );
     }
+    const mtprotoSupported = telegramStatusSnapshot?.mtproto_supported ?? false;
+    const mtprotoInfo = mtprotoSupported
+      ? telegramStatusSnapshot?.mtproto ?? null
+      : null;
+    const mtprotoConnected = Boolean(mtprotoInfo?.connected);
     return (
       <>
-        <Text style={styles.fieldLabel}>Telegram chat</Text>
+        <Text style={styles.fieldLabel}>Telegram Business chat</Text>
         <Pressable
           style={[
             styles.selectInput,
@@ -1051,7 +1109,7 @@ export default function SendOptionsScreen() {
           ]}
           onPress={() => {
             if (!connectionState.connected) {
-              setContactError("Connect Telegram to select a chat.");
+              setContactError("Connect Telegram Business to select a chat.");
               return;
             }
             if (telegramContactsLoading) return;
@@ -1085,7 +1143,7 @@ export default function SendOptionsScreen() {
         telegramContacts.length === 0 &&
         !telegramContactsError ? (
           <Text style={styles.helperText}>
-            Start a Telegram conversation so it appears here. {"\n\n"}Only
+            Start a Telegram Business conversation so it appears here. {"\n\n"}Only
             clients that have messaged after time of connection appear here.
           </Text>
         ) : null}
@@ -1100,8 +1158,18 @@ export default function SendOptionsScreen() {
                 <Text style={styles.helperText}>No chats available.</Text>
               </View>
             ) : (
-              <ScrollView keyboardShouldPersistTaps="handled">
-                {telegramContacts.map((contact) => {
+                <>
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search chats"
+                    placeholderTextColor={Theme.palette.slate}
+                    value={telegramSearch}
+                    onChangeText={setTelegramSearch}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                {filteredTelegramContacts.map((contact) => {
                   const chatId = String(contact.chat_id);
                   const active = chatId === telegramChatId;
                   const name =
@@ -1129,6 +1197,7 @@ export default function SendOptionsScreen() {
                         setTelegramUsername(username);
                         setTelegramPickerExpanded(false);
                         setContactError(null);
+                        setTelegramSearch("");
                       }}
                     >
                       <Text style={styles.selectionItemName}>{name}</Text>
@@ -1147,7 +1216,39 @@ export default function SendOptionsScreen() {
                   );
                 })}
               </ScrollView>
+                  {filteredTelegramContacts.length === 0 ? (
+                    <View style={styles.selectionEmpty}>
+                      <Text style={styles.helperText}>No matches.</Text>
+                    </View>
+                  ) : null}
+                </>
             )}
+          </View>
+        ) : null}
+        {mtprotoSupported ? (
+          <View style={styles.telegramAccountCard}>
+            <Text style={styles.helperText}>
+              {mtprotoConnected
+                ? "Telegram account session is active."
+                : "Connect your Telegram account so DueSoon can keep conversations fresh."}
+            </Text>
+            {mtprotoInfo?.last_error ? (
+              <Text style={styles.helperTextError}>
+                Session issue: {mtprotoInfo.last_error}
+              </Text>
+            ) : null}
+            <Pressable
+              style={styles.telegramAccountButton}
+              onPress={() =>
+                openTelegramMtprotoFlow(mtprotoInfo?.phone_number ?? undefined)
+              }
+            >
+              <Text style={styles.telegramAccountButtonText}>
+                {mtprotoConnected
+                  ? "Reconnect Telegram account"
+                  : "Connect Telegram account"}
+              </Text>
+            </Pressable>
           </View>
         ) : null}
       </>
@@ -1229,6 +1330,7 @@ export default function SendOptionsScreen() {
               return null;
             }
             const active = selection === option.id;
+            const gmailSelfOption = platform === "gmail" && option.id === "self";
             return (
               <Pressable
                 key={option.id}
@@ -1247,60 +1349,75 @@ export default function SendOptionsScreen() {
                 {active ? (
                   option.id === "self" ? (
                     supportsConnection(platform) ? (
-                      <View style={styles.connectBox}>
-                        <Text style={styles.connectTitle}>
-                          Connect {platformLabel}
-                        </Text>
-                        <Text style={styles.connectDetail}>
-                          DueSoon sends directly from your {platformLabel}{" "}
-                          account so messages feel personal.
-                        </Text>
-                        {connectionState.meta ? (
-                          <Text style={styles.connectMeta}>
-                            {connectionState.meta}
+                      gmailSelfOption ? (
+                        <View style={styles.noteBox}>
+                          <Feather
+                            name="clock"
+                            size={16}
+                            color={Theme.palette.slate}
+                          />
+                          <Text style={styles.noteText}>
+                            Send as you via Gmail is coming soon. Choose “Send
+                            on your behalf” or another platform to keep going.
                           </Text>
-                        ) : null}
-                        {connectionState.error ? (
-                          <Text style={styles.errorText}>
-                            {connectionState.error}
+                        </View>
+                      ) : (
+                        <View style={styles.connectBox}>
+                          <Text style={styles.connectTitle}>
+                            Connect {platformLabel}
                           </Text>
-                        ) : null}
-                        <Pressable
-                          style={[
-                            styles.connectButton,
-                            connectionState.connected &&
-                              styles.connectButtonConnected,
-                            (connectionState.busy || connectionState.loading) &&
-                              styles.connectButtonDisabled,
-                          ]}
-                          disabled={
-                            connectionState.connected ||
-                            connectionState.busy ||
-                            connectionState.loading
-                          }
-                          onPress={async () => {
-                            await Haptics.selectionAsync();
-                            await handleConnectPress();
-                          }}
-                        >
-                          {connectionState.connected ? (
-                            <View style={styles.connectButtonContent}>
-                              <Feather name="check" size={14} color="#FFFFFF" />
-                              <Text style={styles.connectButtonText}>
-                                Connected
-                              </Text>
-                            </View>
-                          ) : (
-                            <Text style={styles.connectButtonText}>
-                              {connectionState.busy
-                                ? "Connecting..."
-                                : connectionState.loading
-                                  ? "Checking..."
-                                  : `Connect ${platformLabel}`}
+                          <Text style={styles.connectDetail}>
+                            DueSoon sends directly from your {platformLabel}{" "}
+                            account so messages feel personal.
+                          </Text>
+                          {connectionState.meta ? (
+                            <Text style={styles.connectMeta}>
+                              {connectionState.meta}
                             </Text>
-                          )}
-                        </Pressable>
-                      </View>
+                          ) : null}
+                          {connectionState.error ? (
+                            <Text style={styles.errorText}>
+                              {connectionState.error}
+                            </Text>
+                          ) : null}
+                          <Pressable
+                            style={[
+                              styles.connectButton,
+                              connectionState.connected &&
+                                styles.connectButtonConnected,
+                              (connectionState.busy ||
+                                connectionState.loading) &&
+                                styles.connectButtonDisabled,
+                            ]}
+                            disabled={
+                              connectionState.connected ||
+                              connectionState.busy ||
+                              connectionState.loading
+                            }
+                            onPress={async () => {
+                              await Haptics.selectionAsync();
+                              await handleConnectPress();
+                            }}
+                          >
+                            {connectionState.connected ? (
+                              <View style={styles.connectButtonContent}>
+                                <Feather name="check" size={14} color="#FFFFFF" />
+                                <Text style={styles.connectButtonText}>
+                                  Connected
+                                </Text>
+                              </View>
+                            ) : (
+                              <Text style={styles.connectButtonText}>
+                                {connectionState.busy
+                                  ? "Connecting..."
+                                  : connectionState.loading
+                                    ? "Checking..."
+                                    : `Connect ${platformLabel}`}
+                              </Text>
+                            )}
+                          </Pressable>
+                        </View>
+                      )
                     ) : (
                       <View style={styles.noteBox}>
                         <Feather
@@ -1336,12 +1453,12 @@ export default function SendOptionsScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.primaryButton,
-            (!connectionReady || savingClient) && styles.primaryButtonDisabled,
-            pressed && connectionReady && styles.primaryButtonPressed,
+            (!canContinue || savingClient) && styles.primaryButtonDisabled,
+            pressed && canContinue && styles.primaryButtonPressed,
           ]}
-          disabled={!connectionReady}
+          disabled={!canContinue}
           onPress={async () => {
-            if (!connectionReady) return;
+            if (!canContinue) return;
             if (
               platform === "telegram" &&
               selection === "self" &&
@@ -1357,7 +1474,12 @@ export default function SendOptionsScreen() {
             Use {selectionLabel(selection)} via {platformLabel}
           </Text>
         </Pressable>
-        {selectionRequiresConnection && !connectionState.connected ? (
+        {gmailSelfComingSoon ? (
+          <Text style={styles.connectionHint}>
+            Send as you via Gmail is coming soon. Choose “Send on your behalf”
+            or another platform to continue.
+          </Text>
+        ) : selectionRequiresConnection && !connectionState.connected ? (
           <Text style={styles.connectionHint}>
             Connect {platformLabel} to continue.
           </Text>
@@ -1429,6 +1551,7 @@ export default function SendOptionsScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
+      {telegramMtprotoModal}
     </SafeAreaView>
   );
 }
@@ -1469,7 +1592,7 @@ function validateContactFields(
   }
   if (platform === "whatsapp") {
     if (!fields.phone.trim()) {
-      return { valid: false, error: "Enter the WhatsApp number." };
+      return { valid: false, error: "Enter the WhatsApp Business number." };
     }
     return {
       valid: true,
@@ -1508,7 +1631,7 @@ function validateContactFields(
     };
   }
   if (!fields.telegramChatId.trim()) {
-    return { valid: false, error: "Select a Telegram chat." };
+      return { valid: false, error: "Select a Telegram Business chat." };
   }
   return {
     valid: true,
@@ -1847,6 +1970,15 @@ const styles = StyleSheet.create({
   selectionListLarge: {
     maxHeight: 260,
   },
+  searchInput: {
+    borderBottomWidth: 1,
+    borderColor: Theme.palette.border,
+    paddingHorizontal: Theme.spacing.md,
+    paddingVertical: Theme.spacing.xs,
+    fontSize: 15,
+    color: Theme.palette.ink,
+    marginHorizontal: Theme.spacing.sm,
+  },
   selectionItem: {
     paddingHorizontal: Theme.spacing.md,
     paddingVertical: Theme.spacing.sm,
@@ -1882,6 +2014,26 @@ const styles = StyleSheet.create({
   helperTextError: {
     fontSize: 13,
     color: Theme.palette.accent,
+  },
+  telegramAccountCard: {
+    marginTop: Theme.spacing.md,
+    borderWidth: 1,
+    borderColor: Theme.palette.border,
+    borderRadius: Theme.radii.md,
+    padding: Theme.spacing.md,
+    backgroundColor: Theme.palette.surface,
+    gap: Theme.spacing.xs,
+  },
+  telegramAccountButton: {
+    borderRadius: Theme.radii.md,
+    backgroundColor: Theme.palette.ink,
+    paddingVertical: Theme.spacing.sm,
+    alignItems: "center",
+  },
+  telegramAccountButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+    fontSize: 13,
   },
   errorText: {
     fontSize: 13,
@@ -1969,9 +2121,17 @@ function formatSlackMeta(status: SlackStatus) {
 }
 
 function formatTelegramMeta(status: TelegramStatus) {
+  const parts: string[] = [];
   const username = status.connection?.telegram_username;
-  if (!username) return null;
-  return username.startsWith("@") ? username : `@${username}`;
+  if (username) {
+    parts.push(username.startsWith("@") ? username : `@${username}`);
+  }
+  if (status.mtproto?.connected) {
+    parts.push("Account session ready");
+  } else if (status.mtproto?.last_error) {
+    parts.push("Session needs attention");
+  }
+  return parts.join(" · ") || null;
 }
 
 function formatAmountDisplay(amount?: string, currency?: string) {
@@ -2102,7 +2262,7 @@ async function startTelegramConnect(token: string) {
   const onboardingUrl =
     status.connection?.onboarding_url ?? status.onboarding_url;
   if (!onboardingUrl) {
-    throw new Error("Unable to open Telegram. Please try again.");
+    throw new Error("Unable to open Telegram Business. Please try again.");
   }
   await Linking.openURL(onboardingUrl);
 }
